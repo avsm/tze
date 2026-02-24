@@ -1,33 +1,71 @@
 <script lang="ts">
-  import 'maplibre-gl/dist/maplibre-gl.css';
   import maplibregl from 'maplibre-gl';
   import { onMount } from 'svelte';
+  import { mapInstance } from './stores/map';
+  import StoreSelector from './components/StoreSelector.svelte';
+  import LayerSwitcher from './components/LayerSwitcher.svelte';
+  import BandMapper from './components/BandMapper.svelte';
+  import ControlPanel from './components/ControlPanel.svelte';
+  import InfoPanel from './components/InfoPanel.svelte';
 
   let mapContainer: HTMLDivElement;
-  let map: maplibregl.Map;
 
   onMount(() => {
-    map = new maplibregl.Map({
+    const map = new maplibregl.Map({
       container: mapContainer,
       style: {
         version: 8,
         sources: {
-          osm: {
+          basemap: {
             type: 'raster',
-            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+            tiles: ['https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'],
             tileSize: 256,
-            attribution: '&copy; OpenStreetMap contributors',
+            attribution: 'CartoDB, OSM',
           },
         },
-        layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
+        layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
       },
       center: [0, 20],
       zoom: 3,
     });
 
-    return () => map.remove();
+    map.on('load', () => { $mapInstance = map; });
+
+    // Coordinates display
+    map.on('mousemove', (e) => {
+      const coord = document.getElementById('coord-text');
+      if (coord) coord.textContent = `${e.lngLat.lng.toFixed(4)}, ${e.lngLat.lat.toFixed(4)}`;
+    });
+
+    return () => { map.remove(); $mapInstance = null; };
   });
 </script>
 
 <div bind:this={mapContainer} id="map"></div>
-<p class="absolute top-4 left-4 text-term-cyan font-mono text-sm z-10">TZE</p>
+
+<!-- Control panel -->
+<div class="absolute top-4 right-4 w-[280px] bg-black/85 backdrop-blur-xl
+            border border-gray-800/80 rounded-lg shadow-2xl shadow-cyan-900/20
+            overflow-hidden select-none z-10 font-mono text-gray-300 text-xs">
+  <!-- Header -->
+  <div class="px-4 py-3 border-b border-gray-800/60">
+    <div class="flex items-center gap-2">
+      <div class="w-2 h-2 rounded-full bg-term-cyan shadow-[0_0_6px_rgba(0,229,255,0.6)]"></div>
+      <h1 class="text-term-cyan text-sm font-bold tracking-[0.2em] uppercase">TZE</h1>
+    </div>
+    <p class="text-gray-600 text-[10px] mt-0.5 tracking-wider">TESSERA ZARR EXPLORER</p>
+  </div>
+
+  <StoreSelector />
+  <LayerSwitcher />
+  <BandMapper />
+  <ControlPanel />
+  <InfoPanel />
+</div>
+
+<!-- Coordinates -->
+<div class="absolute bottom-2 left-2 bg-black/70 backdrop-blur-sm
+            text-[10px] text-gray-500 font-mono px-2.5 py-1 rounded
+            border border-gray-800/40 z-10 tabular-nums">
+  <span id="coord-text">--</span>
+</div>
