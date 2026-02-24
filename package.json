@@ -1,0 +1,14 @@
+{
+  "name": "tze",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm -F viewer dev",
+    "build": "pnpm -F @ucam-eo/maplibre-zarr-tessera build && pnpm -F viewer build",
+    "test": "pnpm -r test",
+    "check": "pnpm -r check"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
