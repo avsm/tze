@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+@theme {
+  --font-mono: "JetBrains Mono", "Fira Code", monospace;
+  --color-term-green: #39ff14;
+  --color-term-cyan: #00e5ff;
+  --color-term-dim: #6b7280;
+}
+
+body { margin: 0; padding: 0; overflow: hidden; background: #000; }
+#map { position: absolute; inset: 0; }
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+@keyframes pulse-glow { 0%,100%{opacity:.4} 50%{opacity:1} }
+.loading-glow { animation: pulse-glow 1.5s ease-in-out infinite; }
