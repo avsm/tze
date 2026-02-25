@@ -9,6 +9,9 @@
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
+    "@tensorflow-models/knn-classifier": "^1.2.6",
+    "@tensorflow/tfjs-backend-webgl": "^4.22.0",
+    "@tensorflow/tfjs-core": "^4.22.0",
     "@ucam-eo/maplibre-zarr-tessera": "workspace:*",
     "maplibre-gl": "^4.7.1"
   },
