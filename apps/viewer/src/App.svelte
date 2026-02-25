@@ -8,8 +8,12 @@
   import ControlPanel from './components/ControlPanel.svelte';
   import InfoPanel from './components/InfoPanel.svelte';
   import DebugConsole from './components/DebugConsole.svelte';
+  import LabelPanel from './components/LabelPanel.svelte';
+  import { zarrSource } from './stores/zarr';
+  import { activeClass, kernelSize, addLabel } from './stores/classifier';
 
   let mapContainer: HTMLDivElement;
+  let labelMarkers: maplibregl.Marker[] = [];
 
   onMount(() => {
     const map = new maplibregl.Map({
@@ -38,7 +42,37 @@
       if (coord) coord.textContent = `${e.lngLat.lng.toFixed(4)}, ${e.lngLat.lat.toFixed(4)}`;
     });
 
+    // Map click for labeling
+    map.on('click', (e) => {
+      const src = $zarrSource;
+      const cls = $activeClass;
+      if (!src || !cls) return;
+
+      const embeddings = src.getEmbeddingsInKernel(e.lngLat.lng, e.lngLat.lat, $kernelSize);
+      if (embeddings.length === 0) return;
+
+      for (const emb of embeddings) {
+        addLabel([e.lngLat.lng, e.lngLat.lat], emb, cls.id);
+      }
+
+      // Add visual marker at click location
+      const marker = new maplibregl.Marker({
+        color: cls.color,
+        scale: 0.5,
+      })
+        .setLngLat(e.lngLat)
+        .addTo(map);
+      labelMarkers.push(marker);
+    });
+
     return () => { map.remove(); $mapInstance = null; };
+  });
+
+  $effect(() => {
+    const map = $mapInstance;
+    if (!map) return;
+    const canvas = map.getCanvasContainer();
+    canvas.style.cursor = $activeClass ? 'crosshair' : '';
   });
 </script>
 
@@ -61,6 +95,7 @@
   <LayerSwitcher />
   <BandMapper />
   <ControlPanel />
+  <LabelPanel />
   <InfoPanel />
 </div>
 
