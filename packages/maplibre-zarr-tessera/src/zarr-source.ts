@@ -2,6 +2,7 @@ import type { Map as MaplibreMap, LngLatBoundsLike } from 'maplibre-gl';
 import type {
   ZarrTesseraOptions, StoreMetadata, CachedChunk,
   ChunkBounds, UtmBounds, PreviewMode, ZarrTesseraEvents, DebugLogEntry,
+  TileEmbeddings, EmbeddingAt,
 } from './types.js';
 import { UtmProjection } from './projection.js';
 import { openStore, fetchRegion, type ZarrStore } from './zarr-reader.js';
@@ -20,6 +21,8 @@ export class ZarrTesseraSource {
   private autoZoomNext = true;
   private totalLoaded = 0;
   private clickedChunks = new Set<string>();
+  /** Cache of raw 128-d embeddings for tiles loaded via double-click. */
+  public embeddingCache = new Map<string, TileEmbeddings>();
   private moveHandler: (() => void) | null = null;
   private listeners = new Map<string, Set<EventCallback<unknown>>>();
 
@@ -64,6 +67,20 @@ export class ZarrTesseraSource {
       this.moveHandler = () => this.updateVisibleChunks();
       map.on('moveend', this.moveHandler);
 
+      // Double-click to load full embeddings for a tile
+      map.on('dblclick', (e) => {
+        e.preventDefault();
+        const chunk = this.getChunkAtLngLat(e.lngLat.lng, e.lngLat.lat);
+        if (!chunk) return;
+        const key = this.chunkKey(chunk.ci, chunk.cj);
+        if (this.embeddingCache.has(key)) {
+          this.debug('info', `Chunk (${chunk.ci},${chunk.cj}) embeddings already loaded`);
+          return;
+        }
+        this.debug('fetch', `Double-click: loading embeddings for chunk (${chunk.ci},${chunk.cj})`);
+        this.loadFullChunk(chunk.ci, chunk.cj);
+      });
+
       // Start initial load after fly animation
       setTimeout(() => this.updateVisibleChunks(), 1800);
     } catch (err) {
@@ -78,6 +95,7 @@ export class ZarrTesseraSource {
     }
     this.currentAbort?.abort();
     for (const [key] of this.chunkCache) this.removeChunkFromMap(key);
+    this.embeddingCache.clear();
     this.chunkCache.clear();
     this.removeOverlays();
     this.workerPool?.terminate();
@@ -190,12 +208,181 @@ export class ZarrTesseraSource {
       ({ sourceId, layerId } = this.addChunkToMap(ci, cj, canvas));
     }
 
+    const returnedEmb = result.embRaw as ArrayBuffer;
+    const returnedScales = result.scalesRaw as ArrayBuffer;
+    const embU8 = new Uint8Array(returnedEmb);
+    const scalesU8 = new Uint8Array(returnedScales);
+
     this.chunkCache.set(key, {
       ci, cj,
-      embRaw: new Uint8Array(result.embRaw as ArrayBuffer),
-      scalesRaw: new Uint8Array(result.scalesRaw as ArrayBuffer),
+      embRaw: embU8,
+      scalesRaw: scalesU8,
       canvas, sourceId, layerId, isPreview: false,
     });
+
+    // Store typed views for classification
+    this.embeddingCache.set(key, {
+      ci, cj,
+      emb: new Int8Array(returnedEmb),
+      scales: new Float32Array(returnedScales),
+      width: w, height: h,
+      nBands: this.store!.meta.nBands,
+    });
+    this.debug('info', `Embeddings cached for chunk (${ci},${cj})`);
+    this.emit('embeddings-loaded', { ci, cj });
+  }
+
+  /** Given a map coordinate, return the chunk indices containing that point, or null. */
+  getChunkAtLngLat(lng: number, lat: number): { ci: number; cj: number } | null {
+    if (!this.store || !this.proj) return null;
+    const [e, n] = this.proj.forward(lng, lat);
+    const t = this.store.meta.transform;
+    const px = t[0], originE = t[2], originN = t[5];
+    const cs = this.store.meta.chunkShape;
+    const s = this.store.meta.shape;
+
+    const col = Math.floor((e - originE) / px);
+    const row = Math.floor((originN - n) / px);
+    if (col < 0 || col >= s[1] || row < 0 || row >= s[0]) return null;
+
+    const ci = Math.floor(row / cs[0]);
+    const cj = Math.floor(col / cs[1]);
+    return { ci, cj };
+  }
+
+  /** Extract the 128-d embedding vector at a map coordinate.
+   *  Returns null if the chunk's embeddings haven't been loaded. */
+  getEmbeddingAt(lng: number, lat: number): EmbeddingAt | null {
+    if (!this.store || !this.proj) return null;
+    const [e, n] = this.proj.forward(lng, lat);
+    const t = this.store.meta.transform;
+    const px = t[0], originE = t[2], originN = t[5];
+    const cs = this.store.meta.chunkShape;
+    const s = this.store.meta.shape;
+
+    const globalCol = Math.floor((e - originE) / px);
+    const globalRow = Math.floor((originN - n) / px);
+    if (globalCol < 0 || globalCol >= s[1] || globalRow < 0 || globalRow >= s[0]) return null;
+
+    const ci = Math.floor(globalRow / cs[0]);
+    const cj = Math.floor(globalCol / cs[1]);
+    const key = this.chunkKey(ci, cj);
+    const tile = this.embeddingCache.get(key);
+    if (!tile) return null;
+
+    const row = globalRow - ci * cs[0];
+    const col = globalCol - cj * cs[1];
+    if (row < 0 || row >= tile.height || col < 0 || col >= tile.width) return null;
+
+    // Check scale validity
+    const pixelIdx = row * tile.width + col;
+    const scale = tile.scales[pixelIdx];
+    if (!scale || isNaN(scale)) return null;
+
+    // Extract embedding vector
+    const nBands = tile.nBands;
+    const offset = pixelIdx * nBands;
+    const embedding = new Float32Array(nBands);
+    for (let b = 0; b < nBands; b++) {
+      embedding[b] = tile.emb[offset + b];
+    }
+
+    return { embedding, ci, cj, row, col };
+  }
+
+  /** Extract embeddings for all valid pixels in a kernel around a map coordinate. */
+  getEmbeddingsInKernel(lng: number, lat: number, kernelSize: number): EmbeddingAt[] {
+    if (!this.store || !this.proj) return [];
+    const [e, n] = this.proj.forward(lng, lat);
+    const t = this.store.meta.transform;
+    const px = t[0], originE = t[2], originN = t[5];
+    const cs = this.store.meta.chunkShape;
+    const s = this.store.meta.shape;
+
+    const centerCol = Math.floor((e - originE) / px);
+    const centerRow = Math.floor((originN - n) / px);
+    const radius = Math.floor((kernelSize - 1) / 2);
+    const results: EmbeddingAt[] = [];
+
+    for (let dr = -radius; dr <= radius; dr++) {
+      for (let dc = -radius; dc <= radius; dc++) {
+        const gr = centerRow + dr;
+        const gc = centerCol + dc;
+        if (gr < 0 || gr >= s[0] || gc < 0 || gc >= s[1]) continue;
+
+        const ci = Math.floor(gr / cs[0]);
+        const cj = Math.floor(gc / cs[1]);
+        const key = this.chunkKey(ci, cj);
+        const tile = this.embeddingCache.get(key);
+        if (!tile) continue;
+
+        const row = gr - ci * cs[0];
+        const col = gc - cj * cs[1];
+        const pixelIdx = row * tile.width + col;
+        const scale = tile.scales[pixelIdx];
+        if (!scale || isNaN(scale)) continue;
+
+        const nBands = tile.nBands;
+        const offset = pixelIdx * nBands;
+        const embedding = new Float32Array(nBands);
+        for (let b = 0; b < nBands; b++) {
+          embedding[b] = tile.emb[offset + b];
+        }
+        results.push({ embedding, ci, cj, row, col });
+      }
+    }
+    return results;
+  }
+
+  /** Add a classification RGBA canvas as a map layer for a chunk. */
+  addClassificationOverlay(ci: number, cj: number, canvas: HTMLCanvasElement): void {
+    if (!this.map) return;
+    const key = this.chunkKey(ci, cj);
+    const sourceId = `zarr-class-src-${key}`;
+    const layerId = `zarr-class-lyr-${key}`;
+    const corners = this.chunkCorners(ci, cj);
+    const dataUrl = canvas.toDataURL('image/png');
+
+    if (this.map.getLayer(layerId)) this.map.removeLayer(layerId);
+    if (this.map.getSource(sourceId)) this.map.removeSource(sourceId);
+
+    this.map.addSource(sourceId, {
+      type: 'image', url: dataUrl, coordinates: corners,
+    });
+    this.map.addLayer({
+      id: layerId, type: 'raster', source: sourceId,
+      paint: { 'raster-opacity': 0.7, 'raster-fade-duration': 0 },
+    });
+
+    if (this.map.getLayer('chunk-grid-lines')) this.map.moveLayer('chunk-grid-lines');
+    if (this.map.getLayer('utm-zone-line')) this.map.moveLayer('utm-zone-line');
+    this.debug('overlay', `Classification overlay added for chunk (${ci},${cj})`);
+  }
+
+  /** Remove all classification overlays from the map. */
+  clearClassificationOverlays(): void {
+    if (!this.map) return;
+    const style = this.map.getStyle();
+    if (!style?.layers) return;
+    const classLayers = style.layers.filter(l => l.id.startsWith('zarr-class-lyr-'));
+    for (const layer of classLayers) {
+      this.map.removeLayer(layer.id);
+      const srcId = layer.id.replace('zarr-class-lyr-', 'zarr-class-src-');
+      if (this.map.getSource(srcId)) this.map.removeSource(srcId);
+    }
+    this.debug('overlay', 'Cleared all classification overlays');
+  }
+
+  /** Set opacity on all classification overlay layers. */
+  setClassificationOpacity(opacity: number): void {
+    if (!this.map) return;
+    const style = this.map.getStyle();
+    if (!style?.layers) return;
+    for (const layer of style.layers) {
+      if (layer.id.startsWith('zarr-class-lyr-')) {
+        this.map.setPaintProperty(layer.id, 'raster-opacity', opacity);
+      }
+    }
   }
 
   on<K extends keyof ZarrTesseraEvents>(
