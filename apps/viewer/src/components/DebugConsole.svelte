@@ -5,6 +5,8 @@
   let logs = $state<DebugLogEntry[]>([]);
   let expanded = $state(true);
   let logContainer = $state<HTMLDivElement>(undefined!);
+  let embFetchActive = $state<string | null>(null); // chunk key being fetched
+  let embFetchStage = $state(0); // 0=idle, 1=fetching, 2=rendering
 
   const MAX_LOGS = 200;
 
@@ -26,6 +28,19 @@
 
   function onDebug(entry: DebugLogEntry) {
     logs = [...logs.slice(-(MAX_LOGS - 1)), entry];
+
+    // Track embedding fetch progress from debug messages
+    if (entry.type === 'fetch' && entry.msg.startsWith('Loading embeddings')) {
+      const match = entry.msg.match(/\((\d+),(\d+)\)/);
+      embFetchActive = match ? `${match[1]},${match[2]}` : 'tile';
+      embFetchStage = 1;
+    } else if (entry.type === 'fetch' && entry.msg.startsWith('Embeddings fetched')) {
+      embFetchStage = 2;
+    } else if (entry.type === 'info' && entry.msg.startsWith('Embeddings ready')) {
+      embFetchStage = 0;
+      embFetchActive = null;
+    }
+
     // Auto-scroll
     requestAnimationFrame(() => {
       if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
@@ -84,6 +99,22 @@
     {/if}
     <span class="text-gray-700 ml-auto tabular-nums">{logs.length}</span>
   </button>
+
+  <!-- Embedding fetch progress bar -->
+  {#if embFetchActive}
+    <div class="bg-black/90 border-x border-gray-800/60 px-3 py-1.5 flex items-center gap-2">
+      <span class="text-yellow-400 text-[10px] shrink-0">
+        {embFetchStage === 1 ? '⟳ Fetching' : '⟳ Rendering'} ({embFetchActive})
+      </span>
+      <div class="flex-1 h-1.5 bg-gray-900 rounded-full overflow-hidden">
+        <div
+          class="h-full rounded-full transition-all duration-500
+                 {embFetchStage === 1 ? 'bg-yellow-400/80 w-1/2' : 'bg-green-400/80 w-full'}"
+          style="animation: pulse 1.5s ease-in-out infinite;"
+        ></div>
+      </div>
+    </div>
+  {/if}
 
   {#if expanded}
     <div

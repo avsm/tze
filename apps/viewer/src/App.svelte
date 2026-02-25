@@ -10,6 +10,7 @@
   import DebugConsole from './components/DebugConsole.svelte';
   import LabelPanel from './components/LabelPanel.svelte';
   import { zarrSource } from './stores/zarr';
+  import { get } from 'svelte/store';
   import { activeClass, kernelSize, addLabel } from './stores/classifier';
 
   let mapContainer: HTMLDivElement;
@@ -43,12 +44,15 @@
     });
 
     // Map click for labeling
+    // NOTE: use get() to read stores inside imperative callbacks —
+    // the $ prefix only works in Svelte's reactive context.
     map.on('click', (e) => {
-      const src = $zarrSource;
-      const cls = $activeClass;
+      const src = get(zarrSource);
+      const cls = get(activeClass);
       if (!src || !cls) return;
 
-      const embeddings = src.getEmbeddingsInKernel(e.lngLat.lng, e.lngLat.lat, $kernelSize);
+      const ks = get(kernelSize);
+      const embeddings = src.getEmbeddingsInKernel(e.lngLat.lng, e.lngLat.lat, ks);
       if (embeddings.length === 0) return;
 
       for (const emb of embeddings) {

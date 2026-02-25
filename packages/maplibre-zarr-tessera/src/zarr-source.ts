@@ -178,11 +178,15 @@ export class ZarrTesseraSource {
     const { r0, r1, c0, c1 } = this.chunkPixelBounds(ci, cj);
     const h = r1 - r0;
     const w = c1 - c0;
+    const nBands = this.store.meta.nBands;
+    const expectedBytes = w * h * nBands;
+    this.debug('fetch', `Loading embeddings (${ci},${cj}): ${w}x${h}x${nBands} = ${(expectedBytes / 1024).toFixed(0)} KB`);
 
     const [embView, scalesView] = await Promise.all([
       fetchRegion(this.store.embArr, [[r0, r1], [c0, c1], null]),
       fetchRegion(this.store.scalesArr, [[r0, r1], [c0, c1]]),
     ]);
+    this.debug('fetch', `Embeddings fetched (${ci},${cj}), rendering...`);
 
     const embBuf = new Int8Array(
       embView.data.buffer, embView.data.byteOffset, embView.data.byteLength,
@@ -193,7 +197,7 @@ export class ZarrTesseraSource {
 
     const result = await this.workerPool.dispatch({
       type: 'render-emb', embRaw: embBuf, scalesRaw: scalesBuf,
-      width: w, height: h, nBands: this.store.meta.nBands, bands: this.opts.bands,
+      width: w, height: h, nBands, bands: this.opts.bands,
     }, [embBuf, scalesBuf]);
 
     const entry = this.chunkCache.get(key);
@@ -226,10 +230,13 @@ export class ZarrTesseraSource {
       emb: new Int8Array(returnedEmb),
       scales: new Float32Array(returnedScales),
       width: w, height: h,
-      nBands: this.store!.meta.nBands,
+      nBands,
     });
-    this.debug('info', `Embeddings cached for chunk (${ci},${cj})`);
+    this.debug('info', `Embeddings ready (${ci},${cj}): ${(returnedEmb.byteLength / 1024).toFixed(0)} KB cached`);
     this.emit('embeddings-loaded', { ci, cj });
+
+    // Update embedding highlight border on map
+    this.updateEmbeddingHighlights();
   }
 
   /** Given a map coordinate, return the chunk indices containing that point, or null. */
@@ -383,6 +390,50 @@ export class ZarrTesseraSource {
         this.map.setPaintProperty(layer.id, 'raster-opacity', opacity);
       }
     }
+  }
+
+  /** Update the GeoJSON highlight border around tiles with cached embeddings. */
+  private updateEmbeddingHighlights(): void {
+    if (!this.map || !this.proj) return;
+    const sourceId = 'emb-highlight';
+    const layerId = 'emb-highlight-line';
+
+    const features: GeoJSON.Feature[] = [];
+    for (const [, tile] of this.embeddingCache) {
+      const corners = this.chunkCorners(tile.ci, tile.cj);
+      features.push({
+        type: 'Feature',
+        properties: {},
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[corners[0], corners[1], corners[2], corners[3], corners[0]]],
+        },
+      });
+    }
+
+    const data: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features };
+
+    if (this.map.getSource(sourceId)) {
+      (this.map.getSource(sourceId) as unknown as { setData(d: GeoJSON.FeatureCollection): void }).setData(data);
+    } else {
+      this.map.addSource(sourceId, { type: 'geojson', data });
+      this.map.addLayer({
+        id: layerId,
+        type: 'line',
+        source: sourceId,
+        paint: {
+          'line-color': '#f59e0b',
+          'line-width': 2.5,
+          'line-opacity': 0.9,
+          'line-dasharray': [3, 2],
+        },
+      });
+    }
+
+    // Keep on top of data layers
+    if (this.map.getLayer('chunk-grid-lines')) this.map.moveLayer('chunk-grid-lines');
+    if (this.map.getLayer(layerId)) this.map.moveLayer(layerId);
+    if (this.map.getLayer('utm-zone-line')) this.map.moveLayer('utm-zone-line');
   }
 
   on<K extends keyof ZarrTesseraEvents>(
@@ -838,11 +889,12 @@ export class ZarrTesseraSource {
   }
 
   private removeOverlays(): void {
-    const layers = ['chunk-grid-nodata', 'chunk-grid-data', 'chunk-grid-lines', 'utm-zone-fill', 'utm-zone-line'];
+    const layers = ['chunk-grid-nodata', 'chunk-grid-data', 'chunk-grid-lines', 'utm-zone-fill', 'utm-zone-line', 'emb-highlight-line'];
     for (const id of layers) {
       if (this.map?.getLayer(id)) this.map.removeLayer(id);
     }
     if (this.map?.getSource('utm-zone')) this.map.removeSource('utm-zone');
     if (this.map?.getSource('chunk-grid')) this.map.removeSource('chunk-grid');
+    if (this.map?.getSource('emb-highlight')) this.map.removeSource('emb-highlight');
   }
 }
