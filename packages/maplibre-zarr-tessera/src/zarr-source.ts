@@ -28,8 +28,14 @@ export class ZarrTesseraSource {
   private listeners = new Map<string, Set<EventCallback<unknown>>>();
   /** Tracks active loading animations per chunk key → animation frame ID. */
   private loadingAnimations = new Map<string, number>();
+  /** Chunks currently being fetched (prevents double-click re-triggering). */
+  private loadingChunks = new Set<string>();
   /** Per-pixel class ID maps from classification, keyed by chunk key. */
   private classificationMaps = new Map<string, { width: number; height: number; classMap: Int16Array }>();
+  /** Timer for debounced color enhancement after viewport settles. */
+  private enhanceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Whether visible chunks have been enhanced since last move. */
+  private enhanced = false;
 
   constructor(options: ZarrTesseraOptions) {
     this.opts = {
@@ -75,8 +81,8 @@ export class ZarrTesseraSource {
         const chunk = this.getChunkAtLngLat(e.lngLat.lng, e.lngLat.lat);
         if (!chunk) return;
         const key = this.chunkKey(chunk.ci, chunk.cj);
-        if (this.embeddingCache.has(key)) {
-          this.debug('info', `Chunk (${chunk.ci},${chunk.cj}) embeddings already loaded`);
+        if (this.embeddingCache.has(key) || this.loadingChunks.has(key)) {
+          this.debug('info', `Chunk (${chunk.ci},${chunk.cj}) already ${this.loadingChunks.has(key) ? 'loading' : 'loaded'}`);
           return;
         }
         this.debug('fetch', `Double-click: loading embeddings for chunk (${chunk.ci},${chunk.cj})`);
@@ -96,11 +102,13 @@ export class ZarrTesseraSource {
       this.map.off('moveend', this.moveHandler);
     }
     this.currentAbort?.abort();
+    if (this.enhanceTimer) { clearTimeout(this.enhanceTimer); this.enhanceTimer = null; }
     for (const [, frameId] of this.loadingAnimations) cancelAnimationFrame(frameId);
     this.loadingAnimations.clear();
     for (const [key] of this.chunkCache) this.removeChunkFromMap(key);
     this.embeddingCache.clear();
     this.classificationMaps.clear();
+    this.loadingChunks.clear();
     this.chunkCache.clear();
     this.removeOverlays();
     this.workerPool?.terminate();
@@ -178,14 +186,24 @@ export class ZarrTesseraSource {
     this.debug('overlay', `Re-added ${this.chunkCache.size} cached chunks`);
   }
 
-  /** Load full embedding data for a specific chunk (for band exploration). */
+  /** Load full embedding data for a specific chunk (for band exploration).
+   *  Fetches all data in one go, then progressively renders row strips
+   *  with a diffusion edge effect. Preview tile stays visible underneath. */
   async loadFullChunk(ci: number, cj: number): Promise<void> {
     if (!this.store || !this.map) return;
     const key = this.chunkKey(ci, cj);
+    if (this.loadingChunks.has(key)) return;
+    this.loadingChunks.add(key);
     this.clickedChunks.add(key);
 
-    // Start loading animation over the preview tile
+    // Stop any scan animation but keep the preview tile underneath
+    this.stopLoadingAnimation(ci, cj);
+
+    // Show loading animation immediately while network fetch runs
     this.startLoadingAnimation(ci, cj);
+
+    // Abort background tile loading to prioritise embedding download
+    this.currentAbort?.abort();
 
     try {
       const { r0, r1, c0, c1 } = this.chunkPixelBounds(ci, cj);
@@ -197,76 +215,186 @@ export class ZarrTesseraSource {
       this.debug('fetch', `Loading embeddings (${ci},${cj}): ${w}x${h}x${nBands} = ${(expectedBytes / 1024).toFixed(0)} KB`);
       this.emit('embedding-progress', { ci, cj, stage: 'fetching', bytes: expectedBytes });
 
+      // Single fetch — zarrita caches internal chunks so splitting doesn't help
       const [embView, scalesView] = await Promise.all([
         fetchRegion(this.store.embArr, [[r0, r1], [c0, c1], null]),
         fetchRegion(this.store.scalesArr, [[r0, r1], [c0, c1]]),
       ]);
-      this.debug('fetch', `Embeddings fetched (${ci},${cj}), rendering...`);
-      this.emit('embedding-progress', { ci, cj, stage: 'rendering', bytes: expectedBytes });
 
-      // Copy the raw data out of zarrita's views into independent buffers.
-      // embView.data is Int8Array (1 byte/elem), scalesView.data is Float32Array (4 bytes/elem).
+      // Copy into independent buffers
       const embInt8 = new Int8Array(embView.data.buffer, embView.data.byteOffset,
         embView.data.byteLength).slice();
-      // Reinterpret scales bytes as Float32 — create a fresh copy via Uint8Array round-trip
       const scalesCopy = new Uint8Array(scalesView.data.buffer, scalesView.data.byteOffset,
         scalesView.data.byteLength).slice();
       const scalesF32 = new Float32Array(scalesCopy.buffer);
 
-      // Render inline on main thread — avoids worker pool queue contention
-      // which caused the "rendering" phase to hang behind regular chunk loads.
+      this.debug('fetch', `Embeddings fetched (${ci},${cj}), progressive render...`);
+      this.emit('embedding-progress', { ci, cj, stage: 'rendering', bytes: expectedBytes });
+
+      // Percentile-based contrast stretch for vivid colours
       const [bR, bG, bB] = this.opts.bands;
-      let minR = 127, maxR = -128, minG = 127, maxG = -128, minB = 127, maxB = -128;
-      let nValid = 0;
+      const valsR: number[] = [], valsG: number[] = [], valsB: number[] = [];
+      let totalValid = 0;
       for (let i = 0; i < w * h; i++) {
         if (isNaN(scalesF32[i]) || scalesF32[i] === 0) continue;
         const base = i * nBands;
-        const vr = embInt8[base + bR], vg = embInt8[base + bG], vb = embInt8[base + bB];
-        if (vr < minR) minR = vr; if (vr > maxR) maxR = vr;
-        if (vg < minG) minG = vg; if (vg > maxG) maxG = vg;
-        if (vb < minB) minB = vb; if (vb > maxB) maxB = vb;
-        nValid++;
+        valsR.push(embInt8[base + bR]);
+        valsG.push(embInt8[base + bG]);
+        valsB.push(embInt8[base + bB]);
+        totalValid++;
       }
+      const perc = (arr: number[], p: number) => {
+        arr.sort((a, b) => a - b);
+        return arr[Math.floor(p * (arr.length - 1))];
+      };
+      const loR = totalValid > 0 ? perc(valsR, 0.02) : 0, hiR = totalValid > 0 ? perc(valsR, 0.98) : 1;
+      const loG = totalValid > 0 ? perc(valsG, 0.02) : 0, hiG = totalValid > 0 ? perc(valsG, 0.98) : 1;
+      const loB = totalValid > 0 ? perc(valsB, 0.02) : 0, hiB = totalValid > 0 ? perc(valsB, 0.98) : 1;
+      const rangeR = hiR - loR || 1, rangeG = hiG - loG || 1, rangeB = hiB - loB || 1;
+      const SAT = 1.4, GAMMA = 0.85;
+      const renderPixel = (base: number): [number, number, number] => {
+        let nr = (embInt8[base + bR] - loR) / rangeR;
+        let ng = (embInt8[base + bG] - loG) / rangeG;
+        let nb = (embInt8[base + bB] - loB) / rangeB;
+        nr = nr < 0 ? 0 : nr > 1 ? 1 : nr;
+        ng = ng < 0 ? 0 : ng > 1 ? 1 : ng;
+        nb = nb < 0 ? 0 : nb > 1 ? 1 : nb;
+        const lum = 0.299 * nr + 0.587 * ng + 0.114 * nb;
+        nr = lum + (nr - lum) * SAT; ng = lum + (ng - lum) * SAT; nb = lum + (nb - lum) * SAT;
+        nr = nr < 0 ? 0 : nr > 1 ? 1 : nr;
+        ng = ng < 0 ? 0 : ng > 1 ? 1 : ng;
+        nb = nb < 0 ? 0 : nb > 1 ? 1 : nb;
+        return [
+          Math.round(Math.pow(nr, GAMMA) * 255),
+          Math.round(Math.pow(ng, GAMMA) * 255),
+          Math.round(Math.pow(nb, GAMMA) * 255),
+        ];
+      };
 
-      const rgba = new Uint8Array(w * h * 4);
-      if (nValid > 0 && !(maxR === minR && maxG === minG && maxB === minB)) {
-        const rangeR = maxR - minR || 1, rangeG = maxG - minG || 1, rangeB = maxB - minB || 1;
-        for (let i = 0; i < w * h; i++) {
-          const pi = i * 4;
-          const scale = scalesF32[i];
-          if (isNaN(scale) || scale === 0) { rgba[pi + 3] = 0; continue; }
-          const base = i * nBands;
-          rgba[pi]     = Math.max(0, Math.min(255, ((embInt8[base + bR] - minR) / rangeR) * 255));
-          rgba[pi + 1] = Math.max(0, Math.min(255, ((embInt8[base + bG] - minG) / rangeG) * 255));
-          rgba[pi + 2] = Math.max(0, Math.min(255, ((embInt8[base + bB] - minB) / rangeB) * 255));
-          rgba[pi + 3] = 255;
-        }
-      }
-
-      this.debug('render', `Embedding render (${ci},${cj}): ${nValid} valid pixels`);
-
-      // Stop animation and remove preview before adding embedding layer
+      // Stop loading animation, set up progressive overlay
       this.stopLoadingAnimation(ci, cj);
+
+      const corners = this.chunkCorners(ci, cj);
+      const overlaySourceId = `zarr-prog-src-${key}`;
+      const overlayLayerId = `zarr-prog-lyr-${key}`;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d')!;
+
+      if (this.map.getLayer(overlayLayerId)) this.map.removeLayer(overlayLayerId);
+      if (this.map.getSource(overlaySourceId)) this.map.removeSource(overlaySourceId);
+      this.map.addSource(overlaySourceId, {
+        type: 'image', url: canvas.toDataURL('image/png'), coordinates: corners,
+      });
+      this.map.addLayer({
+        id: overlayLayerId, type: 'raster', source: overlaySourceId,
+        paint: { 'raster-opacity': this.opts.opacity, 'raster-fade-duration': 0 },
+      });
+      this.raiseOverlayLayers();
+
+      // Progressive render from in-memory data, yielding each frame
+      const STRIP_ROWS = 16;
+      const nStrips = Math.ceil(h / STRIP_ROWS);
+      const img = ctx.createImageData(w, h);
+
+      const renderStrip = (strip: number) => {
+        const rowsLoaded = Math.min((strip + 1) * STRIP_ROWS, h);
+        const prevRows = strip * STRIP_ROWS;
+
+        if (totalValid > 0) {
+          // Render newly loaded rows
+          for (let y = prevRows; y < rowsLoaded; y++) {
+            for (let x = 0; x < w; x++) {
+              const i = y * w + x;
+              const pi = i * 4;
+              const scale = scalesF32[i];
+              if (isNaN(scale) || scale === 0) { img.data[pi + 3] = 0; continue; }
+              const [r, g, b] = renderPixel(i * nBands);
+              img.data[pi] = r; img.data[pi + 1] = g; img.data[pi + 2] = b; img.data[pi + 3] = 255;
+            }
+          }
+
+          // Clear diffusion from previous frame
+          for (let y = rowsLoaded; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+              img.data[(y * w + x) * 4 + 3] = 0;
+            }
+          }
+
+          // Diffusion edge: dissolve noise below the render frontier
+          if (rowsLoaded < h) {
+            const edgeRows = Math.min(48, h - rowsLoaded);
+            for (let dy = 0; dy < edgeRows; dy++) {
+              const y = rowsLoaded + dy;
+              const prob = Math.pow(1 - dy / edgeRows, 3);
+              for (let x = 0; x < w; x++) {
+                const hash = ((x * 2654435761) ^ (y * 2246822519) ^ (strip * 13)) >>> 0;
+                if ((hash % 1000) / 1000 < prob) {
+                  const pi = (y * w + x) * 4;
+                  const srcX = Math.min(Math.max(0, x + ((hash >> 8) % 5) - 2), w - 1);
+                  const srcI = (rowsLoaded - 1) * w + srcX;
+                  if (!isNaN(scalesF32[srcI]) && scalesF32[srcI] !== 0) {
+                    const [r, g, b] = renderPixel(srcI * nBands);
+                    img.data[pi] = r; img.data[pi + 1] = g; img.data[pi + 2] = b;
+                    img.data[pi + 3] = Math.round(255 * prob * prob);
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        ctx.putImageData(img, 0, 0);
+        const src = this.map!.getSource(overlaySourceId) as
+          { updateImage?: (opts: { url: string; coordinates: [number, number][] }) => void } | undefined;
+        src?.updateImage?.({ url: canvas.toDataURL('image/png'), coordinates: corners });
+      };
+
+      // Animate strips via requestAnimationFrame for smooth visual streaming
+      await new Promise<void>((resolve) => {
+        let strip = 0;
+        const step = () => {
+          if (!this.map || strip >= nStrips) { resolve(); return; }
+          renderStrip(strip);
+          strip++;
+          requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      });
+
+      this.debug('render', `Embedding render (${ci},${cj}): ${totalValid} valid pixels`);
+
+      // Remove progressive overlay
+      if (this.map!.getLayer(overlayLayerId)) this.map!.removeLayer(overlayLayerId);
+      if (this.map!.getSource(overlaySourceId)) this.map!.removeSource(overlaySourceId);
+
+      // Remove old preview and replace with final embedding layer
       const existing = this.chunkCache.get(key);
       if (existing?.sourceId) this.removeChunkFromMap(key);
 
-      let canvas: HTMLCanvasElement | null = null;
       let sourceId: string | null = null;
       let layerId: string | null = null;
 
-      if (nValid > 0) {
-        canvas = this.rgbaToCanvas(rgba.buffer, w, h);
-        ({ sourceId, layerId } = this.addChunkToMap(ci, cj, canvas));
+      if (totalValid > 0) {
+        const rgba = new Uint8Array(w * h * 4);
+        for (let i = 0; i < w * h; i++) {
+          const pi = i * 4;
+          if (isNaN(scalesF32[i]) || scalesF32[i] === 0) { rgba[pi + 3] = 0; continue; }
+          const [r, g, b] = renderPixel(i * nBands);
+          rgba[pi] = r; rgba[pi + 1] = g; rgba[pi + 2] = b; rgba[pi + 3] = 255;
+        }
+        const finalCanvas = this.rgbaToCanvas(rgba.buffer, w, h);
+        ({ sourceId, layerId } = this.addChunkToMap(ci, cj, finalCanvas));
       }
-
-      const embU8 = new Uint8Array(embInt8.buffer);
-      const scalesU8 = new Uint8Array(scalesF32.buffer);
 
       this.chunkCache.set(key, {
         ci, cj,
-        embRaw: embU8,
-        scalesRaw: scalesU8,
-        canvas, sourceId, layerId, isPreview: false,
+        embRaw: new Uint8Array(embInt8.buffer),
+        scalesRaw: new Uint8Array(scalesF32.buffer),
+        rgbRaw: null,
+        canvas: null, sourceId, layerId, isPreview: false,
       });
 
       // Store typed views for classification
@@ -283,11 +411,18 @@ export class ZarrTesseraSource {
 
       // Update embedding highlight border on map
       this.updateEmbeddingHighlights();
+
+      // Resume background tile loading
+      this.updateVisibleChunks();
     } catch (err) {
       this.stopLoadingAnimation(ci, cj);
       this.debug('error', `Embedding load (${ci},${cj}) failed: ${(err as Error).message}`);
       this.emit('embedding-progress', { ci, cj, stage: 'done', bytes: 0 });
       console.error(`loadFullChunk(${ci},${cj}) failed:`, err);
+      // Resume background tile loading even on error
+      this.updateVisibleChunks();
+    } finally {
+      this.loadingChunks.delete(key);
     }
   }
 
@@ -813,6 +948,8 @@ export class ZarrTesseraSource {
   private async updateVisibleChunks(): Promise<void> {
     if (!this.store || !this.map) return;
     this.currentAbort?.abort();
+    if (this.enhanceTimer) { clearTimeout(this.enhanceTimer); this.enhanceTimer = null; }
+    this.enhanced = false;
     const abort = this.currentAbort = new AbortController();
     const signal = abort.signal;
 
@@ -889,6 +1026,76 @@ export class ZarrTesseraSource {
         }
       }
     }
+
+    // If all visible tiles are now loaded and we haven't been aborted, enhance colors
+    if (!signal.aborted && !this.enhanced) {
+      this.enhanceVisibleChunks();
+    }
+  }
+
+  /** Re-render all visible cached chunks with enhanced colors (percentile + saturation + gamma). */
+  private async enhanceVisibleChunks(): Promise<void> {
+    if (!this.workerPool || !this.store || !this.map) return;
+    this.enhanced = true;
+    const visible = this.visibleChunkIndices();
+    const tasks: Promise<void>[] = [];
+
+    for (const [ci, cj] of visible) {
+      const key = this.chunkKey(ci, cj);
+      const entry = this.chunkCache.get(key);
+      if (!entry || !entry.sourceId) continue; // not on map
+
+      const { r0, r1, c0, c1 } = this.chunkPixelBounds(ci, cj);
+      const h = r1 - r0;
+      const w = c1 - c0;
+      const corners = this.chunkCorners(ci, cj);
+
+      if (entry.embRaw && entry.scalesRaw) {
+        // Re-render embedding tile with enhance
+        const embCopy = entry.embRaw.slice().buffer;
+        const scalesCopy = entry.scalesRaw.slice().buffer;
+
+        const task = this.workerPool.dispatch({
+          type: 'render-emb', embRaw: embCopy, scalesRaw: scalesCopy,
+          width: w, height: h, nBands: this.store.meta.nBands, bands: this.opts.bands,
+          enhance: true,
+        }, [embCopy, scalesCopy]).then((result) => {
+          if (!this.enhanced) return; // aborted by new move
+          entry.embRaw = new Uint8Array(result.embRaw as ArrayBuffer);
+          entry.scalesRaw = new Uint8Array(result.scalesRaw as ArrayBuffer);
+          if ((result.nValid as number) > 0 && entry.sourceId) {
+            const canvas = this.rgbaToCanvas(result.rgba as ArrayBuffer, w, h);
+            entry.canvas = canvas;
+            const src = this.map?.getSource(entry.sourceId) as
+              { updateImage?: (opts: { url: string; coordinates: [number, number][] }) => void } | undefined;
+            src?.updateImage?.({ url: canvas.toDataURL('image/png'), coordinates: corners });
+          }
+        });
+        tasks.push(task);
+      } else if (entry.rgbRaw) {
+        // Re-render RGB/PCA preview tile with enhance
+        const rgbData = entry.rgbRaw.slice().buffer;
+
+        const task = this.workerPool.dispatch({
+          type: 'render-rgb', rgbData, width: w, height: h, enhance: true,
+        }, [rgbData]).then((result) => {
+          if (!this.enhanced) return;
+          if ((result.nValid as number) > 0 && entry.sourceId) {
+            const canvas = this.rgbaToCanvas(result.rgba as ArrayBuffer, w, h);
+            entry.canvas = canvas;
+            const src = this.map?.getSource(entry.sourceId) as
+              { updateImage?: (opts: { url: string; coordinates: [number, number][] }) => void } | undefined;
+            src?.updateImage?.({ url: canvas.toDataURL('image/png'), coordinates: corners });
+          }
+        });
+        tasks.push(task);
+      }
+    }
+
+    if (tasks.length > 0) {
+      this.debug('render', `Enhancing ${tasks.length} visible tiles`);
+      await Promise.all(tasks);
+    }
   }
 
   private async loadChunk(
@@ -903,18 +1110,21 @@ export class ZarrTesseraSource {
       const w = c1 - c0;
 
       let result: Record<string, unknown>;
+      let rgbRawSaved: Uint8Array | null = null;
 
       if (usePreview && !this.clickedChunks.has(key)) {
         const previewArr = this.opts.preview === 'pca'
           ? this.store!.pcaArr! : this.store!.rgbArr!;
         const rgbView = await fetchRegion(previewArr, [[r0, r1], [c0, c1], null]);
         if (signal.aborted) return;
-        const rgbData = new Uint8Array(
+        const rgbBytes = new Uint8Array(
           rgbView.data.buffer, rgbView.data.byteOffset, rgbView.data.byteLength,
-        ).slice().buffer;
+        ).slice();
+        rgbRawSaved = rgbBytes; // keep a copy for enhance pass
+        const rgbData = rgbBytes.slice().buffer; // transfer copy to worker
 
         result = await this.workerPool!.dispatch({
-          type: 'render-rgb', rgbData, width: w, height: h,
+          type: 'render-rgb', rgbData, width: w, height: h, enhance: false,
         }, [rgbData]);
       } else {
         const [embView, scalesView] = await Promise.all([
@@ -932,8 +1142,12 @@ export class ZarrTesseraSource {
         result = await this.workerPool!.dispatch({
           type: 'render-emb', embRaw: embBuf, scalesRaw: scalesBuf,
           width: w, height: h, nBands: this.store!.meta.nBands, bands: this.opts.bands,
+          enhance: false,
         }, [embBuf, scalesBuf]);
       }
+
+      // Check again after worker dispatch — viewport may have moved
+      if (signal.aborted) return;
 
       let canvas: HTMLCanvasElement | null = null;
       let sourceId: string | null = null;
@@ -948,6 +1162,7 @@ export class ZarrTesseraSource {
         ci, cj,
         embRaw: (result.embRaw as ArrayBuffer) ? new Uint8Array(result.embRaw as ArrayBuffer) : null,
         scalesRaw: (result.scalesRaw as ArrayBuffer) ? new Uint8Array(result.scalesRaw as ArrayBuffer) : null,
+        rgbRaw: rgbRawSaved,
         canvas, sourceId, layerId, isPreview: usePreview,
       });
       this.totalLoaded++;
@@ -958,7 +1173,7 @@ export class ZarrTesseraSource {
       this.debug('error', `Chunk (${ci},${cj}) failed: ${(err as Error).message}`);
       console.warn(`Failed to load chunk (${ci},${cj}):`, err);
       this.chunkCache.set(key, {
-        ci, cj, embRaw: null, scalesRaw: null,
+        ci, cj, embRaw: null, scalesRaw: null, rgbRaw: null,
         canvas: null, sourceId: null, layerId: null, isPreview: false,
       });
     }
@@ -982,6 +1197,7 @@ export class ZarrTesseraSource {
       const task = this.workerPool.dispatch({
         type: 'render-emb', embRaw: embCopy, scalesRaw: scalesCopy,
         width: w, height: h, nBands: this.store.meta.nBands, bands: this.opts.bands,
+        enhance: true,
       }, [embCopy, scalesCopy]).then((result) => {
         entry.embRaw = new Uint8Array(result.embRaw as ArrayBuffer);
         entry.scalesRaw = new Uint8Array(result.scalesRaw as ArrayBuffer);

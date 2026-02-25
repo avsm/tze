@@ -44,6 +44,7 @@ export interface CachedChunk {
   cj: number;
   embRaw: Uint8Array | null;
   scalesRaw: Uint8Array | null;
+  rgbRaw: Uint8Array | null;      // raw RGB/PCA preview bytes for re-rendering
   canvas: HTMLCanvasElement | null;
   sourceId: string | null;
   layerId: string | null;
