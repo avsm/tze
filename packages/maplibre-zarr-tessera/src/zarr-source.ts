@@ -181,12 +181,14 @@ export class ZarrTesseraSource {
     const nBands = this.store.meta.nBands;
     const expectedBytes = w * h * nBands;
     this.debug('fetch', `Loading embeddings (${ci},${cj}): ${w}x${h}x${nBands} = ${(expectedBytes / 1024).toFixed(0)} KB`);
+    this.emit('embedding-progress', { ci, cj, stage: 'fetching', bytes: expectedBytes });
 
     const [embView, scalesView] = await Promise.all([
       fetchRegion(this.store.embArr, [[r0, r1], [c0, c1], null]),
       fetchRegion(this.store.scalesArr, [[r0, r1], [c0, c1]]),
     ]);
     this.debug('fetch', `Embeddings fetched (${ci},${cj}), rendering...`);
+    this.emit('embedding-progress', { ci, cj, stage: 'rendering', bytes: expectedBytes });
 
     const embBuf = new Int8Array(
       embView.data.buffer, embView.data.byteOffset, embView.data.byteLength,
@@ -233,6 +235,7 @@ export class ZarrTesseraSource {
       nBands,
     });
     this.debug('info', `Embeddings ready (${ci},${cj}): ${(returnedEmb.byteLength / 1024).toFixed(0)} KB cached`);
+    this.emit('embedding-progress', { ci, cj, stage: 'done', bytes: returnedEmb.byteLength });
     this.emit('embeddings-loaded', { ci, cj });
 
     // Update embedding highlight border on map

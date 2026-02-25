@@ -58,10 +58,18 @@ export interface DebugLogEntry {
   msg: string;
 }
 
+export interface EmbeddingProgress {
+  ci: number;
+  cj: number;
+  stage: 'fetching' | 'rendering' | 'done';
+  bytes?: number; // expected total bytes
+}
+
 export interface ZarrTesseraEvents {
   'metadata-loaded': StoreMetadata;
   'chunk-loaded': { ci: number; cj: number };
   'embeddings-loaded': { ci: number; cj: number };
+  'embedding-progress': EmbeddingProgress;
   'error': Error;
   'loading': { total: number; done: number };
   'debug': DebugLogEntry;

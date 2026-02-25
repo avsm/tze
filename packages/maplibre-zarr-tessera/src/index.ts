@@ -5,6 +5,7 @@ export type {
   PreviewMode,
   ZarrTesseraEvents,
   DebugLogEntry,
+  EmbeddingProgress,
   TileEmbeddings,
   EmbeddingAt,
 } from './types.js';
