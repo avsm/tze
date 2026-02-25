@@ -86,7 +86,7 @@ export async function classifyTiles(
       for (let j = 0; j < predictions.length; j++) {
         const pred = predictions[j];
         const pixelIdx = validIndices[b + j];
-        const classId = parseInt(pred.label ?? String(pred.classIndex));
+        const classId = parseInt(String((pred as Record<string, unknown>).label ?? pred.classIndex));
         const confidence = pred.confidences[classId] ?? 0;
         const rgbaIdx = pixelIdx * 4;
 

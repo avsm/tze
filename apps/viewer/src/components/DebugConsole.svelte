@@ -38,7 +38,7 @@
   }
 
   // Track source subscription
-  let currentSource: ReturnType<typeof $zarrSource> = null;
+  let currentSource: typeof $zarrSource = null;
 
   $effect(() => {
     const src = $zarrSource;
