@@ -79,9 +79,9 @@
 <div bind:this={mapContainer} id="map"></div>
 
 <!-- Control panel -->
-<div class="absolute top-4 right-4 w-[280px] bg-black/85 backdrop-blur-xl
+<div class="absolute top-4 right-4 w-[280px] max-h-[calc(100vh-2rem)] bg-black/85 backdrop-blur-xl
             border border-gray-800/80 rounded-lg shadow-2xl shadow-cyan-900/20
-            overflow-hidden select-none z-10 font-mono text-gray-300 text-xs">
+            overflow-y-auto select-none z-10 font-mono text-gray-300 text-xs">
   <!-- Header -->
   <div class="px-4 py-3 border-b border-gray-800/60">
     <div class="flex items-center gap-2">
