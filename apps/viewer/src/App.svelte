@@ -7,6 +7,7 @@
   import BandMapper from './components/BandMapper.svelte';
   import ControlPanel from './components/ControlPanel.svelte';
   import InfoPanel from './components/InfoPanel.svelte';
+  import DebugConsole from './components/DebugConsole.svelte';
 
   let mapContainer: HTMLDivElement;
 
@@ -63,8 +64,11 @@
   <InfoPanel />
 </div>
 
+<!-- Debug console -->
+<DebugConsole />
+
 <!-- Coordinates -->
-<div class="absolute bottom-2 left-2 bg-black/70 backdrop-blur-sm
+<div class="absolute bottom-2 right-4 bg-black/70 backdrop-blur-sm
             text-[10px] text-gray-500 font-mono px-2.5 py-1 rounded
             border border-gray-800/40 z-10 tabular-nums">
   <span id="coord-text">--</span>

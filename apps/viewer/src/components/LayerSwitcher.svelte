@@ -1,5 +1,6 @@
 <script lang="ts">
   import { mapInstance } from '../stores/map';
+  import { zarrSource } from '../stores/zarr';
 
   const BASEMAPS = [
     { id: 'osm', label: 'Streets', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], attribution: '&copy; OpenStreetMap' },
@@ -11,19 +12,27 @@
   let selected = $state('dark');
 
   function switchBasemap(id: string) {
-    if (!$mapInstance || selected === id) return;
+    const map = $mapInstance;
+    if (!map || selected === id) return;
     selected = id;
     const bm = BASEMAPS.find(b => b.id === id)!;
 
-    $mapInstance.setStyle({
-      version: 8,
-      sources: {
-        basemap: {
-          type: 'raster', tiles: [...bm.tiles], tileSize: 256, attribution: bm.attribution,
-        },
-      },
-      layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
+    // Remove old basemap layer+source, add new ones — without touching other layers
+    if (map.getLayer('basemap')) map.removeLayer('basemap');
+    if (map.getSource('basemap')) map.removeSource('basemap');
+
+    map.addSource('basemap', {
+      type: 'raster',
+      tiles: [...bm.tiles],
+      tileSize: 256,
+      attribution: bm.attribution,
     });
+    // Insert basemap at the bottom so all zarr/overlay layers stay on top
+    const firstLayer = map.getStyle().layers[0];
+    map.addLayer(
+      { id: 'basemap', type: 'raster', source: 'basemap' },
+      firstLayer?.id,
+    );
   }
 </script>
 

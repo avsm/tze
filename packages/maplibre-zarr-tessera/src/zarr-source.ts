@@ -1,7 +1,7 @@
 import type { Map as MaplibreMap, LngLatBoundsLike } from 'maplibre-gl';
 import type {
   ZarrTesseraOptions, StoreMetadata, CachedChunk,
-  ChunkBounds, UtmBounds, PreviewMode, ZarrTesseraEvents,
+  ChunkBounds, UtmBounds, PreviewMode, ZarrTesseraEvents, DebugLogEntry,
 } from './types.js';
 import { UtmProjection } from './projection.js';
 import { openStore, fetchRegion, type ZarrStore } from './zarr-reader.js';
@@ -46,8 +46,12 @@ export class ZarrTesseraSource {
     );
 
     try {
+      this.debug('fetch', `Opening store: ${this.opts.url}`);
       this.store = await openStore(this.opts.url);
       this.proj = new UtmProjection(this.store.meta.epsg);
+      this.debug('info', `Store opened: zone ${this.store.meta.utmZone}, EPSG:${this.store.meta.epsg}, ${this.store.meta.nBands} bands`);
+      this.debug('info', `Shape: ${this.store.meta.shape.join('x')}, chunks: ${this.store.meta.chunkShape.join('x')}`);
+      if (this.store.chunkManifest) this.debug('info', `Manifest: ${this.store.chunkManifest.size} chunks with data`);
       this.emit('metadata-loaded', this.store.meta);
 
       // Add overlays
@@ -124,6 +128,29 @@ export class ZarrTesseraSource {
     }
   }
 
+  /** Re-add all chunk, overlay, and grid layers to the map.
+   *  Call after a basemap switch that preserves sources but resets layers. */
+  reAddAllLayers(): void {
+    if (!this.map || !this.store) return;
+    this.debug('overlay', 'Re-adding all layers after basemap switch');
+
+    // Re-add overlays (removes first if present)
+    this.addOverlays();
+
+    // Re-add cached chunk layers that were on the map
+    for (const [, entry] of this.chunkCache) {
+      if (entry.canvas) {
+        // Remove stale refs
+        entry.sourceId = null;
+        entry.layerId = null;
+        const ids = this.addChunkToMap(entry.ci, entry.cj, entry.canvas);
+        entry.sourceId = ids.sourceId;
+        entry.layerId = ids.layerId;
+      }
+    }
+    this.debug('overlay', `Re-added ${this.chunkCache.size} cached chunks`);
+  }
+
   /** Load full embedding data for a specific chunk (for band exploration). */
   async loadFullChunk(ci: number, cj: number): Promise<void> {
     if (!this.store || !this.workerPool || !this.map) return;
@@ -192,6 +219,10 @@ export class ZarrTesseraSource {
     event: K, data: ZarrTesseraEvents[K],
   ): void {
     this.listeners.get(event)?.forEach(cb => cb(data));
+  }
+
+  private debug(type: DebugLogEntry['type'], msg: string): void {
+    this.emit('debug', { time: Date.now(), type, msg });
   }
 
   private chunkKey(ci: number, cj: number): string { return `${ci}_${cj}`; }
@@ -317,11 +348,14 @@ export class ZarrTesseraSource {
 
     const visible = this.visibleChunkIndices();
     const visibleKeys = new Set(visible.map(([ci, cj]) => this.chunkKey(ci, cj)));
+    this.debug('info', `Viewport: ${visible.length} chunks visible, ${this.chunkCache.size} cached`);
 
     // Remove off-screen chunks from map (keep in cache)
+    let removed = 0;
     for (const [key, entry] of this.chunkCache) {
-      if (!visibleKeys.has(key) && entry.sourceId) this.removeChunkFromMap(key);
+      if (!visibleKeys.has(key) && entry.sourceId) { this.removeChunkFromMap(key); removed++; }
     }
+    if (removed) this.debug('info', `Removed ${removed} off-screen chunk layers`);
 
     // Re-add cached chunks and collect new ones to load
     const toLoad: [number, number][] = [];
@@ -351,8 +385,10 @@ export class ZarrTesseraSource {
     } catch { /* keep original order */ }
 
     if (toLoad.length > this.opts.maxLoadPerUpdate) {
+      this.debug('info', `Clamping load queue: ${toLoad.length} -> ${this.opts.maxLoadPerUpdate}`);
       toLoad.length = this.opts.maxLoadPerUpdate;
     }
+    if (toLoad.length > 0) this.debug('fetch', `Loading ${toLoad.length} chunks (concurrency=${this.opts.concurrency})`);
 
     // Determine preview mode
     const usePreview =
@@ -456,9 +492,11 @@ export class ZarrTesseraSource {
         canvas, sourceId, layerId, isPreview: usePreview,
       });
       this.totalLoaded++;
+      this.debug('render', `Chunk (${ci},${cj}): ${(result.nValid as number)} valid px, preview=${usePreview}`);
       this.emit('chunk-loaded', { ci, cj });
     } catch (err) {
       if ((err as Error).name === 'AbortError') return;
+      this.debug('error', `Chunk (${ci},${cj}) failed: ${(err as Error).message}`);
       console.warn(`Failed to load chunk (${ci},${cj}):`, err);
       this.chunkCache.set(key, {
         ci, cj, embRaw: null, scalesRaw: null,
@@ -527,6 +565,7 @@ export class ZarrTesseraSource {
   private addOverlays(): void {
     if (!this.store || !this.map || !this.proj) return;
     this.removeOverlays();
+    this.debug('overlay', 'Adding UTM zone + chunk grid overlays');
 
     // UTM zone boundary
     const zone = this.store.meta.utmZone;

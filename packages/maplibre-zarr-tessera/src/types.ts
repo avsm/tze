@@ -52,9 +52,16 @@ export interface CachedChunk {
 
 export type PreviewMode = 'rgb' | 'pca' | 'bands';
 
+export interface DebugLogEntry {
+  time: number;
+  type: 'fetch' | 'render' | 'overlay' | 'info' | 'error';
+  msg: string;
+}
+
 export interface ZarrTesseraEvents {
   'metadata-loaded': StoreMetadata;
   'chunk-loaded': { ci: number; cj: number };
   'error': Error;
   'loading': { total: number; done: number };
+  'debug': DebugLogEntry;
 }

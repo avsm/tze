@@ -4,4 +4,5 @@ export type {
   StoreMetadata,
   PreviewMode,
   ZarrTesseraEvents,
+  DebugLogEntry,
 } from './types.js';
