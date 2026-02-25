@@ -36,6 +36,8 @@ export class ZarrTesseraSource {
   private enhanceTimer: ReturnType<typeof setTimeout> | null = null;
   /** Whether visible chunks have been enhanced since last move. */
   private enhanced = false;
+  /** Current pyramid level (0 = full resolution). */
+  private currentPyramidLevel = 0;
 
   constructor(options: ZarrTesseraOptions) {
     this.opts = {
@@ -66,6 +68,9 @@ export class ZarrTesseraSource {
       this.debug('info', `Store opened: zone ${this.store.meta.utmZone}, EPSG:${this.store.meta.epsg}, ${this.store.meta.nBands} bands`);
       this.debug('info', `Shape: ${this.store.meta.shape.join('x')}, chunks: ${this.store.meta.chunkShape.join('x')}`);
       if (this.store.chunkManifest) this.debug('info', `Manifest: ${this.store.chunkManifest.size} chunks with data`);
+      if (this.store.meta.hasRgbPyramid || this.store.meta.hasPcaPyramid) {
+        this.debug('info', `Pyramid: ${this.store.meta.pyramidLevels} levels, base pixel ${this.store.meta.pyramidBasePixelSize}m, rgb=${this.store.meta.hasRgbPyramid} (${this.store.rgbPyramidArrs.size} arrs), pca=${this.store.meta.hasPcaPyramid} (${this.store.pcaPyramidArrs.size} arrs)`);
+      }
       this.emit('metadata-loaded', this.store.meta);
 
       // Add overlays
@@ -144,6 +149,7 @@ export class ZarrTesseraSource {
     // Clear cache and reload with new preview mode
     for (const [key] of this.chunkCache) this.removeChunkFromMap(key);
     this.chunkCache.clear();
+    this.currentPyramidLevel = 0; // reset so updateVisibleChunks re-selects
     this.updateVisibleChunks();
   }
 
@@ -173,12 +179,13 @@ export class ZarrTesseraSource {
     this.addOverlays();
 
     // Re-add cached chunk layers that were on the map
+    const level = this.currentPyramidLevel;
     for (const [, entry] of this.chunkCache) {
       if (entry.canvas) {
         // Remove stale refs
         entry.sourceId = null;
         entry.layerId = null;
-        const ids = this.addChunkToMap(entry.ci, entry.cj, entry.canvas);
+        const ids = this.addChunkToMap(entry.ci, entry.cj, entry.canvas, level);
         entry.sourceId = ids.sourceId;
         entry.layerId = ids.layerId;
       }
@@ -714,9 +721,97 @@ export class ZarrTesseraSource {
 
   private chunkKey(ci: number, cj: number): string { return `${ci}_${cj}`; }
 
-  private chunkPixelBounds(ci: number, cj: number): ChunkBounds {
-    const s = this.store!.meta.shape;
-    const cs = this.store!.meta.chunkShape;
+  /** Select the optimal pyramid level based on screen resolution.
+   *  Uses hysteresis: only change level when the ideal differs by ≥1 full step
+   *  from the current level, preventing flicker at level boundaries. */
+  private selectPyramidLevel(): number {
+    if (!this.map || !this.store || !this.proj) return 0;
+    const meta = this.store.meta;
+
+    // No pyramids available for current preview mode
+    const hasPyramid =
+      (this.opts.preview === 'rgb' && meta.hasRgbPyramid) ||
+      (this.opts.preview === 'pca' && meta.hasPcaPyramid);
+    if (!hasPyramid) return 0;
+
+    // Calculate ground resolution: meters per screen pixel
+    const bounds = this.map.getBounds();
+    const sw = this.proj.forward(bounds.getWest(), bounds.getSouth());
+    const ne = this.proj.forward(bounds.getEast(), bounds.getNorth());
+    const canvasWidth = this.map.getCanvas().width;
+    const metersPerPixel = (ne[0] - sw[0]) / canvasWidth;
+
+    // Pick level where pyramid pixel size ≤ screen pixel size
+    // level N has pixel size = basePixelSize * 2^N
+    const base = meta.pyramidBasePixelSize;
+    const maxLevel = meta.pyramidLevels - 1;
+    const ratio = Math.log2(metersPerPixel / base);
+
+    // Hysteresis: to move UP a level, require ratio > current + 0.5
+    // to move DOWN, require ratio < current - 0.5. This prevents flicker
+    // at level boundaries.
+    const current = this.currentPyramidLevel;
+    let level: number;
+    if (ratio > current + 0.5) {
+      level = Math.floor(ratio);
+    } else if (ratio < current - 0.5) {
+      level = Math.ceil(ratio);
+    } else {
+      level = current;
+    }
+    return Math.max(0, Math.min(maxLevel, level));
+  }
+
+  /** Get shape/chunkShape/transform metadata for a given pyramid level. */
+  private pyramidMeta(level: number): {
+    shape: [number, number, number];
+    chunkShape: [number, number, number];
+    transform: [number, number, number, number, number, number];
+  } {
+    if (level === 0 || !this.store) {
+      return {
+        shape: this.store!.meta.shape,
+        chunkShape: this.store!.meta.chunkShape,
+        transform: this.store!.meta.transform,
+      };
+    }
+
+    // Get the pyramid array to read its shape/chunks
+    const pyramidArr =
+      this.store.rgbPyramidArrs.get(level) ??
+      this.store.pcaPyramidArrs.get(level);
+
+    if (!pyramidArr) {
+      // Fallback to full-res if level not available
+      return {
+        shape: this.store.meta.shape,
+        chunkShape: this.store.meta.chunkShape,
+        transform: this.store.meta.transform,
+      };
+    }
+
+    const shape = pyramidArr.shape as [number, number, number];
+    const chunkShape = pyramidArr.chunks as [number, number, number];
+
+    // Read per-level transform from array attrs (written by geotessera),
+    // falling back to computed transform if attrs not available
+    const arrAttrs = pyramidArr.attrs as Record<string, unknown> | undefined;
+    let transform: [number, number, number, number, number, number];
+    if (arrAttrs?.transform) {
+      transform = arrAttrs.transform as [number, number, number, number, number, number];
+    } else {
+      const t = this.store.meta.transform;
+      const scale = Math.pow(2, level);
+      transform = [t[0] * scale, t[1], t[2], t[3], t[4] * scale, t[5]];
+    }
+
+    return { shape, chunkShape, transform };
+  }
+
+  private chunkPixelBounds(ci: number, cj: number, level = 0): ChunkBounds {
+    const pm = this.pyramidMeta(level);
+    const s = pm.shape;
+    const cs = pm.chunkShape;
     return {
       r0: ci * cs[0],
       r1: Math.min(ci * cs[0] + cs[0], s[0]),
@@ -725,9 +820,9 @@ export class ZarrTesseraSource {
     };
   }
 
-  private chunkUtmBounds(ci: number, cj: number): UtmBounds {
-    const { r0, r1, c0, c1 } = this.chunkPixelBounds(ci, cj);
-    const t = this.store!.meta.transform;
+  private chunkUtmBounds(ci: number, cj: number, level = 0): UtmBounds {
+    const { r0, r1, c0, c1 } = this.chunkPixelBounds(ci, cj, level);
+    const t = this.pyramidMeta(level).transform;
     const px = t[0];
     const originE = t[2];
     const originN = t[5];
@@ -739,11 +834,11 @@ export class ZarrTesseraSource {
     };
   }
 
-  private chunkCorners(ci: number, cj: number) {
-    return this.proj!.chunkCornersToLngLat(this.chunkUtmBounds(ci, cj));
+  private chunkCorners(ci: number, cj: number, level = 0) {
+    return this.proj!.chunkCornersToLngLat(this.chunkUtmBounds(ci, cj, level));
   }
 
-  private visibleChunkIndices(): [number, number][] {
+  private visibleChunkIndices(level = 0): [number, number][] {
     if (!this.store || !this.map || !this.proj) return [];
     const bounds = this.map.getBounds();
     const sw = this.proj.forward(bounds.getWest(), bounds.getSouth());
@@ -756,9 +851,10 @@ export class ZarrTesseraSource {
     const minN = Math.min(sw[1], se[1]) - 1000;
     const maxN = Math.max(ne[1], nw[1]) + 1000;
 
-    const cs = this.store.meta.chunkShape;
-    const s = this.store.meta.shape;
-    const t = this.store.meta.transform;
+    const pm = this.pyramidMeta(level);
+    const cs = pm.chunkShape;
+    const s = pm.shape;
+    const t = pm.transform;
     const px = t[0];
     const originE = t[2];
     const originN = t[5];
@@ -773,7 +869,8 @@ export class ZarrTesseraSource {
     const result: [number, number][] = [];
     for (let ci = ciMin; ci <= ciMax; ci++) {
       for (let cj = cjMin; cj <= cjMax; cj++) {
-        if (this.store.chunkManifest && !this.store.chunkManifest.has(`${ci}_${cj}`)) continue;
+        // Chunk manifest only applies to level 0
+        if (level === 0 && this.store.chunkManifest && !this.store.chunkManifest.has(`${ci}_${cj}`)) continue;
         result.push([ci, cj]);
       }
     }
@@ -791,11 +888,11 @@ export class ZarrTesseraSource {
     return canvas;
   }
 
-  private addChunkToMap(ci: number, cj: number, canvas: HTMLCanvasElement) {
+  private addChunkToMap(ci: number, cj: number, canvas: HTMLCanvasElement, level = 0) {
     const key = this.chunkKey(ci, cj);
-    const sourceId = `zarr-chunk-src-${key}`;
-    const layerId = `zarr-chunk-lyr-${key}`;
-    const corners = this.chunkCorners(ci, cj);
+    const sourceId = level > 0 ? `zarr-chunk-src-L${level}_${key}` : `zarr-chunk-src-${key}`;
+    const layerId = level > 0 ? `zarr-chunk-lyr-L${level}_${key}` : `zarr-chunk-lyr-${key}`;
+    const corners = this.chunkCorners(ci, cj, level);
     const dataUrl = canvas.toDataURL('image/png');
 
     if (this.map!.getLayer(layerId)) this.map!.removeLayer(layerId);
@@ -885,11 +982,13 @@ export class ZarrTesseraSource {
     // Animation loop
     const animate = (t: number) => {
       if (!this.map || !this.map.getSource(sourceId)) return;
-      renderFrame(canvas, t);
-      const url = canvas.toDataURL('image/png');
-      const src = this.map.getSource(sourceId) as
-        { updateImage?: (opts: { url: string; coordinates: [number, number][] }) => void } | undefined;
-      src?.updateImage?.({ url, coordinates: corners });
+      try {
+        renderFrame(canvas, t);
+        const url = canvas.toDataURL('image/png');
+        const src = this.map.getSource(sourceId) as
+          { updateImage?: (opts: { url: string; coordinates: [number, number][] }) => void } | undefined;
+        src?.updateImage?.({ url, coordinates: corners });
+      } catch { return; /* source removed */ }
       this.loadingAnimations.set(key, requestAnimationFrame(animate));
     };
     this.loadingAnimations.set(key, requestAnimationFrame(animate));
@@ -953,9 +1052,31 @@ export class ZarrTesseraSource {
     const abort = this.currentAbort = new AbortController();
     const signal = abort.signal;
 
-    const visible = this.visibleChunkIndices();
+    // Select optimal pyramid level based on screen resolution
+    const newLevel = this.selectPyramidLevel();
+    if (newLevel !== this.currentPyramidLevel) {
+      this.debug('info', `Pyramid level changed: ${this.currentPyramidLevel} → ${newLevel}`);
+      // Stop any active loading animations and remove their layers
+      for (const [animKey, frameId] of this.loadingAnimations) {
+        cancelAnimationFrame(frameId);
+        const lyr = `zarr-load-lyr-${animKey}`;
+        const src = `zarr-load-src-${animKey}`;
+        try {
+          if (this.map.getLayer(lyr)) this.map.removeLayer(lyr);
+          if (this.map.getSource(src)) this.map.removeSource(src);
+        } catch { /* ignore */ }
+      }
+      this.loadingAnimations.clear();
+      // Remove all chunks from map and clear cache for level change
+      for (const [key] of this.chunkCache) this.removeChunkFromMap(key);
+      this.chunkCache.clear();
+      this.currentPyramidLevel = newLevel;
+    }
+
+    const level = this.currentPyramidLevel;
+    const visible = this.visibleChunkIndices(level);
     const visibleKeys = new Set(visible.map(([ci, cj]) => this.chunkKey(ci, cj)));
-    this.debug('info', `Viewport: ${visible.length} chunks visible, ${this.chunkCache.size} cached`);
+    this.debug('info', `Viewport: ${visible.length} chunks visible, ${this.chunkCache.size} cached (level ${level})`);
 
     // Remove off-screen chunks from map (keep in cache)
     let removed = 0;
@@ -970,7 +1091,7 @@ export class ZarrTesseraSource {
       const key = this.chunkKey(ci, cj);
       const entry = this.chunkCache.get(key);
       if (entry?.canvas && !entry.sourceId) {
-        const ids = this.addChunkToMap(ci, cj, entry.canvas);
+        const ids = this.addChunkToMap(ci, cj, entry.canvas, level);
         entry.sourceId = ids.sourceId;
         entry.layerId = ids.layerId;
       } else if (!entry) {
@@ -983,8 +1104,8 @@ export class ZarrTesseraSource {
       const center = this.map.getCenter();
       const [cE, cN] = this.proj!.forward(center.lng, center.lat);
       toLoad.sort((a, b) => {
-        const ba = this.chunkUtmBounds(a[0], a[1]);
-        const bb = this.chunkUtmBounds(b[0], b[1]);
+        const ba = this.chunkUtmBounds(a[0], a[1], level);
+        const bb = this.chunkUtmBounds(b[0], b[1], level);
         const da = Math.hypot((ba.minE + ba.maxE) / 2 - cE, (ba.minN + ba.maxN) / 2 - cN);
         const db = Math.hypot((bb.minE + bb.maxE) / 2 - cE, (bb.minN + bb.maxN) / 2 - cN);
         return da - db;
@@ -997,10 +1118,13 @@ export class ZarrTesseraSource {
     }
     if (toLoad.length > 0) this.debug('fetch', `Loading ${toLoad.length} chunks (concurrency=${this.opts.concurrency})`);
 
-    // Determine preview mode
+    // Determine preview mode — at pyramid levels, preview must be available
+    // (selectPyramidLevel only returns >0 when pyramids exist for current preview mode)
     const usePreview =
       (this.opts.preview === 'pca' && this.store.meta.hasPca) ||
       (this.opts.preview === 'rgb' && this.store.meta.hasRgb);
+    // At pyramid levels, always use preview (embeddings only exist at level 0)
+    const effectiveUsePreview = level > 0 ? true : usePreview;
 
     this.emit('loading', { total: toLoad.length, done: 0 });
     let done = 0;
@@ -1009,7 +1133,7 @@ export class ZarrTesseraSource {
       if (signal.aborted) break;
       const batch = toLoad.slice(i, i + this.opts.concurrency);
       await Promise.all(batch.map(([ci, cj]) =>
-        this.loadChunk(ci, cj, signal, usePreview).then(() => {
+        this.loadChunk(ci, cj, signal, effectiveUsePreview, level).then(() => {
           done++;
           this.emit('loading', { total: toLoad.length, done });
         })
@@ -1027,9 +1151,13 @@ export class ZarrTesseraSource {
       }
     }
 
-    // If all visible tiles are now loaded and we haven't been aborted, enhance colors
+    // Schedule enhance pass after tiles are visible for a moment
     if (!signal.aborted && !this.enhanced) {
-      this.enhanceVisibleChunks();
+      if (this.enhanceTimer) clearTimeout(this.enhanceTimer);
+      this.enhanceTimer = setTimeout(() => {
+        this.enhanceTimer = null;
+        if (!this.enhanced) this.enhanceVisibleChunks();
+      }, 300);
     }
   }
 
@@ -1037,7 +1165,8 @@ export class ZarrTesseraSource {
   private async enhanceVisibleChunks(): Promise<void> {
     if (!this.workerPool || !this.store || !this.map) return;
     this.enhanced = true;
-    const visible = this.visibleChunkIndices();
+    const level = this.currentPyramidLevel;
+    const visible = this.visibleChunkIndices(level);
     const tasks: Promise<void>[] = [];
 
     for (const [ci, cj] of visible) {
@@ -1045,10 +1174,10 @@ export class ZarrTesseraSource {
       const entry = this.chunkCache.get(key);
       if (!entry || !entry.sourceId) continue; // not on map
 
-      const { r0, r1, c0, c1 } = this.chunkPixelBounds(ci, cj);
+      const { r0, r1, c0, c1 } = this.chunkPixelBounds(ci, cj, level);
       const h = r1 - r0;
       const w = c1 - c0;
-      const corners = this.chunkCorners(ci, cj);
+      const corners = this.chunkCorners(ci, cj, level);
 
       if (entry.embRaw && entry.scalesRaw) {
         // Re-render embedding tile with enhance
@@ -1099,13 +1228,13 @@ export class ZarrTesseraSource {
   }
 
   private async loadChunk(
-    ci: number, cj: number, signal: AbortSignal, usePreview: boolean,
+    ci: number, cj: number, signal: AbortSignal, usePreview: boolean, level = 0,
   ): Promise<void> {
     const key = this.chunkKey(ci, cj);
     if (this.chunkCache.has(key)) return;
 
     try {
-      const { r0, r1, c0, c1 } = this.chunkPixelBounds(ci, cj);
+      const { r0, r1, c0, c1 } = this.chunkPixelBounds(ci, cj, level);
       const h = r1 - r0;
       const w = c1 - c0;
 
@@ -1113,8 +1242,20 @@ export class ZarrTesseraSource {
       let rgbRawSaved: Uint8Array | null = null;
 
       if (usePreview && !this.clickedChunks.has(key)) {
-        const previewArr = this.opts.preview === 'pca'
-          ? this.store!.pcaArr! : this.store!.rgbArr!;
+        // Select preview array based on pyramid level
+        let previewArr: ZarrStore['rgbArr'] | undefined;
+        if (level === 0) {
+          previewArr = this.opts.preview === 'pca'
+            ? this.store!.pcaArr : this.store!.rgbArr;
+        } else {
+          previewArr = this.opts.preview === 'pca'
+            ? this.store!.pcaPyramidArrs.get(level)
+            : this.store!.rgbPyramidArrs.get(level);
+        }
+        if (!previewArr) {
+          this.debug('error', `Chunk (${ci},${cj}): no preview array at level ${level}, preview=${this.opts.preview}`);
+          return;
+        }
         const rgbView = await fetchRegion(previewArr, [[r0, r1], [c0, c1], null]);
         if (signal.aborted) return;
         const rgbBytes = new Uint8Array(
@@ -1127,9 +1268,11 @@ export class ZarrTesseraSource {
           type: 'render-rgb', rgbData, width: w, height: h, enhance: false,
         }, [rgbData]);
       } else {
+        // Embeddings always load from full-res (level 0)
+        const bounds0 = this.chunkPixelBounds(ci, cj, 0);
         const [embView, scalesView] = await Promise.all([
-          fetchRegion(this.store!.embArr, [[r0, r1], [c0, c1], null]),
-          fetchRegion(this.store!.scalesArr, [[r0, r1], [c0, c1]]),
+          fetchRegion(this.store!.embArr, [[bounds0.r0, bounds0.r1], [bounds0.c0, bounds0.c1], null]),
+          fetchRegion(this.store!.scalesArr, [[bounds0.r0, bounds0.r1], [bounds0.c0, bounds0.c1]]),
         ]);
         if (signal.aborted) return;
         const embBuf = new Int8Array(
@@ -1139,9 +1282,12 @@ export class ZarrTesseraSource {
           new Float32Array(scalesView.data.buffer, scalesView.data.byteOffset, scalesView.data.byteLength).buffer,
         ).slice().buffer;
 
+        const w0 = bounds0.c1 - bounds0.c0;
+        const h0 = bounds0.r1 - bounds0.r0;
         result = await this.workerPool!.dispatch({
           type: 'render-emb', embRaw: embBuf, scalesRaw: scalesBuf,
-          width: w, height: h, nBands: this.store!.meta.nBands, bands: this.opts.bands,
+          width: w0, height: h0,
+          nBands: this.store!.meta.nBands, bands: this.opts.bands,
           enhance: false,
         }, [embBuf, scalesBuf]);
       }
@@ -1155,7 +1301,7 @@ export class ZarrTesseraSource {
 
       if ((result.nValid as number) > 0) {
         canvas = this.rgbaToCanvas(result.rgba as ArrayBuffer, w, h);
-        ({ sourceId, layerId } = this.addChunkToMap(ci, cj, canvas));
+        ({ sourceId, layerId } = this.addChunkToMap(ci, cj, canvas, level));
       }
 
       this.chunkCache.set(key, {
@@ -1166,7 +1312,7 @@ export class ZarrTesseraSource {
         canvas, sourceId, layerId, isPreview: usePreview,
       });
       this.totalLoaded++;
-      this.debug('render', `Chunk (${ci},${cj}): ${(result.nValid as number)} valid px, preview=${usePreview}`);
+      this.debug('render', `Chunk (${ci},${cj}): ${(result.nValid as number)} valid px, preview=${usePreview}, level=${level}`);
       this.emit('chunk-loaded', { ci, cj });
     } catch (err) {
       if ((err as Error).name === 'AbortError') return;

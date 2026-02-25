@@ -23,6 +23,10 @@ export interface StoreMetadata {
   hasRgb: boolean;
   hasPca: boolean;
   pcaExplainedVariance?: number[];
+  hasRgbPyramid: boolean;
+  hasPcaPyramid: boolean;
+  pyramidLevels: number;
+  pyramidBasePixelSize: number;
 }
 
 export interface ChunkBounds {
