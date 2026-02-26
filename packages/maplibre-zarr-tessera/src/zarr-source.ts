@@ -1,4 +1,5 @@
 import type { Map as MaplibreMap } from 'maplibre-gl';
+import { addProtocol, removeProtocol } from 'maplibre-gl';
 import type {
   ZarrTesseraOptions, StoreMetadata, CachedChunk,
   ChunkBounds, UtmBounds, PreviewMode, ZarrTesseraEvents, DebugLogEntry,
@@ -16,15 +17,16 @@ export class ZarrTesseraSource {
   private store: ZarrStore | null = null;
   private proj: UtmProjection | null = null;
   private workerPool: WorkerPool | null = null;
-  private chunkCache = new Map<string, CachedChunk>();
-  private currentAbort: AbortController | null = null;
 
+  private readonly instanceId = Math.random().toString(36).slice(2, 8);
+  private protocolRegistered = false;
 
   private totalLoaded = 0;
   private clickedChunks = new Set<string>();
   /** Cache of raw 128-d embeddings for tiles loaded via double-click. */
   public embeddingCache = new Map<string, TileEmbeddings>();
-  private moveHandler: (() => void) | null = null;
+  /** Old chunkCache — only used for embedding (full-res, double-clicked) tiles now. */
+  private chunkCache = new Map<string, CachedChunk>();
   private listeners = new Map<string, Set<EventCallback<unknown>>>();
   /** Tracks active loading animations per chunk key → animation frame ID. */
   private loadingAnimations = new Map<string, number>();
@@ -32,12 +34,6 @@ export class ZarrTesseraSource {
   private loadingChunks = new Set<string>();
   /** Per-pixel class ID maps from classification, keyed by chunk key. */
   private classificationMaps = new Map<string, { width: number; height: number; classMap: Int16Array }>();
-  /** Timer for debounced color enhancement after viewport settles. */
-  private enhanceTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Whether visible chunks have been enhanced since last move. */
-  private enhanced = false;
-  /** Current pyramid level (0 = full resolution). */
-  private currentPyramidLevel = 0;
 
   constructor(options: ZarrTesseraOptions) {
     this.opts = {
@@ -68,17 +64,41 @@ export class ZarrTesseraSource {
       this.debug('info', `Store opened: zone ${this.store.meta.utmZone}, EPSG:${this.store.meta.epsg}, ${this.store.meta.nBands} bands`);
       this.debug('info', `Shape: ${this.store.meta.shape.join('x')}, chunks: ${this.store.meta.chunkShape.join('x')}`);
       if (this.store.chunkManifest) this.debug('info', `Manifest: ${this.store.chunkManifest.size} chunks with data`);
-      if (this.store.meta.hasRgbPyramid || this.store.meta.hasPcaPyramid) {
-        this.debug('info', `Pyramid: ${this.store.meta.pyramidLevels} levels, base pixel ${this.store.meta.pyramidBasePixelSize}m, rgb=${this.store.meta.hasRgbPyramid} (${this.store.rgbPyramidArrs.size} arrs), pca=${this.store.meta.hasPcaPyramid} (${this.store.pcaPyramidArrs.size} arrs)`);
+      if (this.store.meta.hasRgbMercator || this.store.meta.hasPcaMercator) {
+        const zr = this.store.meta.mercatorZoomRange;
+        this.debug('info', `Mercator: zoom ${zr ? zr[0] + '-' + zr[1] : 'none'}, rgb=${this.store.meta.hasRgbMercator} (${this.store.rgbMercatorArrs.size} arrs), pca=${this.store.meta.hasPcaMercator} (${this.store.pcaMercatorArrs.size} arrs)`);
       }
       this.emit('metadata-loaded', this.store.meta);
 
+      // Register custom protocol for preview tiles
+      const protocolName = `zarr-${this.instanceId}`;
+      addProtocol(protocolName, this.handleTileRequest.bind(this));
+      this.protocolRegistered = true;
+      this.debug('info', `Protocol registered: ${protocolName}`);
+
+      // Compute zoom range
+      const { minzoom, maxzoom } = this.computeZoomRange();
+
+      // Add raster tile source + layer
+      map.addSource('zarr-preview', {
+        type: 'raster',
+        tiles: [`${protocolName}://{z}/{x}/{y}`],
+        tileSize: 256,
+        minzoom,
+        maxzoom,
+      });
+      map.addLayer({
+        id: 'zarr-preview-layer',
+        type: 'raster',
+        source: 'zarr-preview',
+        paint: {
+          'raster-opacity': this.opts.opacity,
+          'raster-fade-duration': 300,
+        },
+      });
+
       // Add overlays
       this.addOverlays();
-
-      // Listen for viewport changes
-      this.moveHandler = () => this.updateVisibleChunks();
-      map.on('moveend', this.moveHandler);
 
       // Double-click to load full embeddings for a tile
       map.on('dblclick', (e) => {
@@ -93,9 +113,6 @@ export class ZarrTesseraSource {
         this.debug('fetch', `Double-click: loading embeddings for chunk (${chunk.ci},${chunk.cj})`);
         this.loadFullChunk(chunk.ci, chunk.cj);
       });
-
-      // Load visible chunks immediately
-      this.updateVisibleChunks();
     } catch (err) {
       this.emit('error', err instanceof Error ? err : new Error(String(err)));
       throw err;
@@ -103,14 +120,25 @@ export class ZarrTesseraSource {
   }
 
   remove(): void {
-    if (this.moveHandler && this.map) {
-      this.map.off('moveend', this.moveHandler);
+    // Remove raster tile layer + source
+    if (this.map) {
+      if (this.map.getLayer('zarr-preview-layer')) this.map.removeLayer('zarr-preview-layer');
+      if (this.map.getSource('zarr-preview')) this.map.removeSource('zarr-preview');
     }
-    this.currentAbort?.abort();
-    if (this.enhanceTimer) { clearTimeout(this.enhanceTimer); this.enhanceTimer = null; }
+
+    // Remove protocol
+    if (this.protocolRegistered) {
+      removeProtocol(`zarr-${this.instanceId}`);
+      this.protocolRegistered = false;
+    }
+
+    // Clean up animations
     for (const [, frameId] of this.loadingAnimations) cancelAnimationFrame(frameId);
     this.loadingAnimations.clear();
+
+    // Clean up embedding chunk layers
     for (const [key] of this.chunkCache) this.removeChunkFromMap(key);
+
     this.embeddingCache.clear();
     this.classificationMaps.clear();
     this.loadingChunks.clear();
@@ -128,13 +156,18 @@ export class ZarrTesseraSource {
 
   setBands(bands: [number, number, number]): void {
     this.opts.bands = bands;
-    this.reRenderChunks();
+    // Re-render embedding tiles (double-clicked full-res) with new bands
+    this.reRenderEmbeddingChunks();
   }
 
   setOpacity(opacity: number): void {
     this.opts.opacity = opacity;
     if (!this.map) return;
-    // Update ALL chunk raster layers on the map (preview + embedding)
+    // Update preview raster layer
+    if (this.map.getLayer('zarr-preview-layer')) {
+      this.map.setPaintProperty('zarr-preview-layer', 'raster-opacity', opacity);
+    }
+    // Update embedding chunk layers
     const style = this.map.getStyle();
     if (!style?.layers) return;
     for (const layer of style.layers) {
@@ -146,11 +179,7 @@ export class ZarrTesseraSource {
 
   setPreview(mode: PreviewMode): void {
     this.opts.preview = mode;
-    // Clear cache and reload with new preview mode
-    for (const [key] of this.chunkCache) this.removeChunkFromMap(key);
-    this.chunkCache.clear();
-    this.currentPyramidLevel = 0; // reset so updateVisibleChunks re-selects
-    this.updateVisibleChunks();
+    this.reloadPreviewSource();
   }
 
   setGridVisible(visible: boolean): void {
@@ -175,22 +204,46 @@ export class ZarrTesseraSource {
     if (!this.map || !this.store) return;
     this.debug('overlay', 'Re-adding all layers after basemap switch');
 
+    // Re-add the raster tile source+layer if missing
+    if (!this.map.getSource('zarr-preview')) {
+      const protocolName = `zarr-${this.instanceId}`;
+      const { minzoom, maxzoom } = this.computeZoomRange();
+      this.map.addSource('zarr-preview', {
+        type: 'raster',
+        tiles: [`${protocolName}://{z}/{x}/{y}`],
+        tileSize: 256,
+        minzoom,
+        maxzoom,
+      });
+    }
+    if (!this.map.getLayer('zarr-preview-layer')) {
+      this.map.addLayer({
+        id: 'zarr-preview-layer',
+        type: 'raster',
+        source: 'zarr-preview',
+        paint: {
+          'raster-opacity': this.opts.opacity,
+          'raster-fade-duration': 300,
+        },
+      });
+    }
+
     // Re-add overlays (removes first if present)
     this.addOverlays();
 
-    // Re-add cached chunk layers that were on the map
-    const level = this.currentPyramidLevel;
+    // Re-add cached embedding chunk layers that were on the map
+    let reAdded = 0;
     for (const [, entry] of this.chunkCache) {
       if (entry.canvas) {
-        // Remove stale refs
         entry.sourceId = null;
         entry.layerId = null;
-        const ids = this.addChunkToMap(entry.ci, entry.cj, entry.canvas, level);
+        const ids = this.addChunkToMap(entry.ci, entry.cj, entry.canvas);
         entry.sourceId = ids.sourceId;
         entry.layerId = ids.layerId;
+        reAdded++;
       }
     }
-    this.debug('overlay', `Re-added ${this.chunkCache.size} cached chunks`);
+    this.debug('overlay', `Re-added ${reAdded} cached embedding chunks`);
   }
 
   /** Load full embedding data for a specific chunk (for band exploration).
@@ -208,9 +261,6 @@ export class ZarrTesseraSource {
 
     // Show loading animation immediately while network fetch runs
     this.startLoadingAnimation(ci, cj);
-
-    // Abort background tile loading to prioritise embedding download
-    this.currentAbort?.abort();
 
     try {
       const { r0, r1, c0, c1 } = this.chunkPixelBounds(ci, cj);
@@ -377,7 +427,7 @@ export class ZarrTesseraSource {
       if (this.map!.getLayer(overlayLayerId)) this.map!.removeLayer(overlayLayerId);
       if (this.map!.getSource(overlaySourceId)) this.map!.removeSource(overlaySourceId);
 
-      // Remove old preview and replace with final embedding layer
+      // Remove old embedding layer if present and replace with final
       const existing = this.chunkCache.get(key);
       if (existing?.sourceId) this.removeChunkFromMap(key);
 
@@ -400,8 +450,7 @@ export class ZarrTesseraSource {
         ci, cj,
         embRaw: new Uint8Array(embInt8.buffer),
         scalesRaw: new Uint8Array(scalesF32.buffer),
-        rgbRaw: null,
-        canvas: null, sourceId, layerId, isPreview: false,
+        canvas: null, sourceId, layerId,
       });
 
       // Store typed views for classification
@@ -418,16 +467,11 @@ export class ZarrTesseraSource {
 
       // Update embedding highlight border on map
       this.updateEmbeddingHighlights();
-
-      // Resume background tile loading
-      this.updateVisibleChunks();
     } catch (err) {
       this.stopLoadingAnimation(ci, cj);
       this.debug('error', `Embedding load (${ci},${cj}) failed: ${(err as Error).message}`);
       this.emit('embedding-progress', { ci, cj, stage: 'done', bytes: 0 });
       console.error(`loadFullChunk(${ci},${cj}) failed:`, err);
-      // Resume background tile loading even on error
-      this.updateVisibleChunks();
     } finally {
       this.loadingChunks.delete(key);
     }
@@ -719,97 +763,163 @@ export class ZarrTesseraSource {
     this.emit('debug', { time: Date.now(), type, msg });
   }
 
-  private chunkKey(ci: number, cj: number): string { return `${ci}_${cj}`; }
-
-  /** Select the optimal pyramid level based on screen resolution.
-   *  Uses hysteresis: only change level when the ideal differs by ≥1 full step
-   *  from the current level, preventing flicker at level boundaries. */
-  private selectPyramidLevel(): number {
-    if (!this.map || !this.store || !this.proj) return 0;
-    const meta = this.store.meta;
-
-    // No pyramids available for current preview mode
-    const hasPyramid =
-      (this.opts.preview === 'rgb' && meta.hasRgbPyramid) ||
-      (this.opts.preview === 'pca' && meta.hasPcaPyramid);
-    if (!hasPyramid) return 0;
-
-    // Calculate ground resolution: meters per screen pixel
-    const bounds = this.map.getBounds();
-    const sw = this.proj.forward(bounds.getWest(), bounds.getSouth());
-    const ne = this.proj.forward(bounds.getEast(), bounds.getNorth());
-    const canvasWidth = this.map.getCanvas().width;
-    const metersPerPixel = (ne[0] - sw[0]) / canvasWidth;
-
-    // Pick level where pyramid pixel size ≤ screen pixel size
-    // level N has pixel size = basePixelSize * 2^N
-    const base = meta.pyramidBasePixelSize;
-    const maxLevel = meta.pyramidLevels - 1;
-    const ratio = Math.log2(metersPerPixel / base);
-
-    // Hysteresis: to move UP a level, require ratio > current + 0.5
-    // to move DOWN, require ratio < current - 0.5. This prevents flicker
-    // at level boundaries.
-    const current = this.currentPyramidLevel;
-    let level: number;
-    if (ratio > current + 0.5) {
-      level = Math.floor(ratio);
-    } else if (ratio < current - 0.5) {
-      level = Math.ceil(ratio);
-    } else {
-      level = current;
-    }
-    return Math.max(0, Math.min(maxLevel, level));
+  private chunkKey(ci: number, cj: number): string {
+    return `${ci}_${cj}`;
   }
 
-  /** Get shape/chunkShape/transform metadata for a given pyramid level. */
-  private pyramidMeta(level: number): {
+  // --- addProtocol tile handler ---
+
+  /** Handle a tile request from MapLibre's raster source.
+   *  URL format: zarr-{instanceId}://{z}/{x}/{y}[?t=timestamp]
+   *  Each tile maps directly to a 256x256 zarr chunk in the mercator pyramid. */
+  private async handleTileRequest(
+    params: { url: string },
+    abortController: AbortController,
+  ): Promise<{ data: ArrayBuffer }> {
+    const transparent = () => this.encodeRgbaToPng(new Uint8Array(256 * 256 * 4), 256, 256);
+
+    if (!this.store || !this.proj) throw new Error('Store not initialized');
+
+    try {
+      // Parse z/x/y from URL
+      const urlPath = params.url.split('://')[1]?.split('?')[0];
+      if (!urlPath) return { data: await transparent() };
+      const parts = urlPath.split('/');
+      const z = parseInt(parts[0], 10);
+      const x = parseInt(parts[1], 10);
+      const y = parseInt(parts[2], 10);
+
+      // Pick the mercator array for this zoom level
+      const mode = this.opts.preview;
+      const mercArrs = mode === 'pca'
+        ? this.store.pcaMercatorArrs
+        : this.store.rgbMercatorArrs;
+
+      // Find best available zoom level (exact or nearest coarser)
+      const zoomRange = this.store.meta.mercatorZoomRange;
+      if (!zoomRange) return { data: await transparent() };
+
+      let arr: ReturnType<typeof mercArrs.get>;
+      let useZ = Math.min(z, zoomRange[1]);
+      while (useZ >= zoomRange[0]) {
+        arr = mercArrs.get(useZ);
+        if (arr) break;
+        useZ--;
+      }
+      if (!arr!) return { data: await transparent() };
+
+      const arrShape = arr.shape as number[];
+      const arrH = arrShape[0];
+      const arrW = arrShape[1];
+
+      // If tile zoom > array zoom, scale tile coords
+      const zoomDiff = z - useZ;
+      const scaledX = Math.floor(x / Math.pow(2, zoomDiff));
+      const scaledY = Math.floor(y / Math.pow(2, zoomDiff));
+
+      // Read tile offset from array attrs if available,
+      // otherwise assume array starts at global tile (0,0).
+      const arrAttrs = arr.attrs as Record<string, unknown>;
+      const tileOffsetX = (arrAttrs.tile_offset_x as number) ?? 0;
+      const tileOffsetY = (arrAttrs.tile_offset_y as number) ?? 0;
+
+      const nTilesX = Math.ceil(arrW / 256);
+      const nTilesY = Math.ceil(arrH / 256);
+      const ax = scaledX - tileOffsetX;
+      const ay = scaledY - tileOffsetY;
+
+      if (ax < 0 || ay < 0 || ax >= nTilesX || ay >= nTilesY) {
+        return { data: await transparent() };
+      }
+
+      // Fetch the 256x256 chunk
+      const r0 = ay * 256;
+      const r1 = Math.min(r0 + 256, arrH);
+      const c0 = ax * 256;
+      const c1 = Math.min(c0 + 256, arrW);
+
+      if (abortController.signal.aborted) throw new DOMException('Aborted', 'AbortError');
+
+      const view = await fetchRegion(arr, [[r0, r1], [c0, c1], null]);
+
+      if (abortController.signal.aborted) throw new DOMException('Aborted', 'AbortError');
+
+      // Build RGBA tile
+      const tileW = 256, tileH = 256;
+      const rgba = new Uint8Array(tileW * tileH * 4);
+      const src = new Uint8Array(view.data.buffer, view.data.byteOffset, view.data.byteLength);
+      const srcH = r1 - r0;
+      const srcW = c1 - c0;
+      const nCh = view.shape.length >= 3 ? view.shape[2] : 3;
+
+      let painted = 0;
+      for (let row = 0; row < srcH; row++) {
+        for (let col = 0; col < srcW; col++) {
+          const si = (row * srcW + col) * nCh;
+          const di = (row * tileW + col) * 4;
+          rgba[di]     = src[si];
+          rgba[di + 1] = src[si + 1] ?? 0;
+          rgba[di + 2] = src[si + 2] ?? 0;
+          rgba[di + 3] = (nCh >= 4) ? src[si + 3] : 255;
+          if (src[si] || src[si + 1] || src[si + 2]) painted++;
+        }
+      }
+
+      if (painted === 0) return { data: await transparent() };
+      return { data: await this.encodeRgbaToPng(rgba, tileW, tileH) };
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') throw err;
+      this.debug('error', `Tile render failed: ${(err as Error).message}`);
+      return { data: await transparent() };
+    }
+  }
+
+  /** Encode raw RGBA pixels to PNG ArrayBuffer via OffscreenCanvas. */
+  private async encodeRgbaToPng(rgba: Uint8Array, w: number, h: number): Promise<ArrayBuffer> {
+    const clamped = new Uint8ClampedArray(w * h * 4);
+    clamped.set(rgba);
+    const imageData = new ImageData(clamped, w, h);
+    const offscreen = new OffscreenCanvas(w, h);
+    const ctx = offscreen.getContext('2d')!;
+    ctx.putImageData(imageData, 0, 0);
+    const blob = await offscreen.convertToBlob({ type: 'image/png' });
+    return blob.arrayBuffer();
+  }
+
+  /** Compute zoom range from the mercator pyramid metadata. */
+  private computeZoomRange(): { minzoom: number; maxzoom: number } {
+    if (!this.store?.meta.mercatorZoomRange) return { minzoom: 0, maxzoom: 18 };
+    const [minzoom, maxzoom] = this.store.meta.mercatorZoomRange;
+    // Allow MapLibre to overzoom 2 levels beyond stored data
+    return { minzoom, maxzoom: Math.min(22, maxzoom + 2) };
+  }
+
+  /** Force MapLibre to re-request all preview tiles (e.g. after preview mode change). */
+  private reloadPreviewSource(): void {
+    if (!this.map) return;
+    const src = this.map.getSource('zarr-preview') as
+      { setTiles?: (tiles: string[]) => void } | undefined;
+    if (src?.setTiles) {
+      const protocolName = `zarr-${this.instanceId}`;
+      src.setTiles([`${protocolName}://{z}/{x}/{y}?t=${Date.now()}`]);
+    }
+  }
+
+  /** Get shape/chunkShape/transform metadata (level 0 / full-res). */
+  private pyramidMeta(): {
     shape: [number, number, number];
     chunkShape: [number, number, number];
     transform: [number, number, number, number, number, number];
   } {
-    if (level === 0 || !this.store) {
-      return {
-        shape: this.store!.meta.shape,
-        chunkShape: this.store!.meta.chunkShape,
-        transform: this.store!.meta.transform,
-      };
-    }
-
-    // Get the pyramid array to read its shape/chunks
-    const pyramidArr =
-      this.store.rgbPyramidArrs.get(level) ??
-      this.store.pcaPyramidArrs.get(level);
-
-    if (!pyramidArr) {
-      // Fallback to full-res if level not available
-      return {
-        shape: this.store.meta.shape,
-        chunkShape: this.store.meta.chunkShape,
-        transform: this.store.meta.transform,
-      };
-    }
-
-    const shape = pyramidArr.shape as [number, number, number];
-    const chunkShape = pyramidArr.chunks as [number, number, number];
-
-    // Read per-level transform from array attrs (written by geotessera),
-    // falling back to computed transform if attrs not available
-    const arrAttrs = pyramidArr.attrs as Record<string, unknown> | undefined;
-    let transform: [number, number, number, number, number, number];
-    if (arrAttrs?.transform) {
-      transform = arrAttrs.transform as [number, number, number, number, number, number];
-    } else {
-      const t = this.store.meta.transform;
-      const scale = Math.pow(2, level);
-      transform = [t[0] * scale, t[1], t[2], t[3], t[4] * scale, t[5]];
-    }
-
-    return { shape, chunkShape, transform };
+    return {
+      shape: this.store!.meta.shape,
+      chunkShape: this.store!.meta.chunkShape,
+      transform: this.store!.meta.transform,
+    };
   }
 
-  private chunkPixelBounds(ci: number, cj: number, level = 0): ChunkBounds {
-    const pm = this.pyramidMeta(level);
+  private chunkPixelBounds(ci: number, cj: number): ChunkBounds {
+    const pm = this.pyramidMeta();
     const s = pm.shape;
     const cs = pm.chunkShape;
     return {
@@ -820,9 +930,9 @@ export class ZarrTesseraSource {
     };
   }
 
-  private chunkUtmBounds(ci: number, cj: number, level = 0): UtmBounds {
-    const { r0, r1, c0, c1 } = this.chunkPixelBounds(ci, cj, level);
-    const t = this.pyramidMeta(level).transform;
+  private chunkUtmBounds(ci: number, cj: number): UtmBounds {
+    const { r0, r1, c0, c1 } = this.chunkPixelBounds(ci, cj);
+    const t = this.pyramidMeta().transform;
     const px = t[0];
     const originE = t[2];
     const originN = t[5];
@@ -834,47 +944,8 @@ export class ZarrTesseraSource {
     };
   }
 
-  private chunkCorners(ci: number, cj: number, level = 0) {
-    return this.proj!.chunkCornersToLngLat(this.chunkUtmBounds(ci, cj, level));
-  }
-
-  private visibleChunkIndices(level = 0): [number, number][] {
-    if (!this.store || !this.map || !this.proj) return [];
-    const bounds = this.map.getBounds();
-    const sw = this.proj.forward(bounds.getWest(), bounds.getSouth());
-    const ne = this.proj.forward(bounds.getEast(), bounds.getNorth());
-    const nw = this.proj.forward(bounds.getWest(), bounds.getNorth());
-    const se = this.proj.forward(bounds.getEast(), bounds.getSouth());
-
-    const minE = Math.min(sw[0], nw[0]) - 1000;
-    const maxE = Math.max(ne[0], se[0]) + 1000;
-    const minN = Math.min(sw[1], se[1]) - 1000;
-    const maxN = Math.max(ne[1], nw[1]) + 1000;
-
-    const pm = this.pyramidMeta(level);
-    const cs = pm.chunkShape;
-    const s = pm.shape;
-    const t = pm.transform;
-    const px = t[0];
-    const originE = t[2];
-    const originN = t[5];
-    const nChunksRow = Math.ceil(s[0] / cs[0]);
-    const nChunksCol = Math.ceil(s[1] / cs[1]);
-
-    const cjMin = Math.max(0, Math.floor((minE - originE) / (cs[1] * px)));
-    const cjMax = Math.min(nChunksCol - 1, Math.floor((maxE - originE) / (cs[1] * px)));
-    const ciMin = Math.max(0, Math.floor((originN - maxN) / (cs[0] * px)));
-    const ciMax = Math.min(nChunksRow - 1, Math.floor((originN - minN) / (cs[0] * px)));
-
-    const result: [number, number][] = [];
-    for (let ci = ciMin; ci <= ciMax; ci++) {
-      for (let cj = cjMin; cj <= cjMax; cj++) {
-        // Chunk manifest only applies to level 0
-        if (level === 0 && this.store.chunkManifest && !this.store.chunkManifest.has(`${ci}_${cj}`)) continue;
-        result.push([ci, cj]);
-      }
-    }
-    return result;
+  private chunkCorners(ci: number, cj: number) {
+    return this.proj!.chunkCornersToLngLat(this.chunkUtmBounds(ci, cj));
   }
 
   private rgbaToCanvas(rgbaBuffer: ArrayBuffer, w: number, h: number): HTMLCanvasElement {
@@ -888,11 +959,12 @@ export class ZarrTesseraSource {
     return canvas;
   }
 
-  private addChunkToMap(ci: number, cj: number, canvas: HTMLCanvasElement, level = 0) {
+  /** Add an embedding chunk to the map as an image source (for double-clicked tiles). */
+  private addChunkToMap(ci: number, cj: number, canvas: HTMLCanvasElement) {
     const key = this.chunkKey(ci, cj);
-    const sourceId = level > 0 ? `zarr-chunk-src-L${level}_${key}` : `zarr-chunk-src-${key}`;
-    const layerId = level > 0 ? `zarr-chunk-lyr-L${level}_${key}` : `zarr-chunk-lyr-${key}`;
-    const corners = this.chunkCorners(ci, cj, level);
+    const sourceId = `zarr-chunk-src-${key}`;
+    const layerId = `zarr-chunk-lyr-${key}`;
+    const corners = this.chunkCorners(ci, cj);
     const dataUrl = canvas.toDataURL('image/png');
 
     if (this.map!.getLayer(layerId)) this.map!.removeLayer(layerId);
@@ -1010,12 +1082,11 @@ export class ZarrTesseraSource {
   }
 
   /** Ensure overlay layers stay above chunk data layers.
-   *  Order (bottom→top): chunk data, grid fills, loading anim, classification, emb-highlight, grid lines, UTM */
+   *  Order (bottom→top): raster tiles, embedding chunks, loading anim, classification, emb-highlight, grid lines, UTM */
   private raiseOverlayLayers(): void {
     const style = this.map!.getStyle();
     if (!style?.layers) return;
-    // Grid fills go above chunk data but below loading/classification
-    // Loading animation overlays above grid lines
+    // Loading animation overlays above chunk data
     for (const layer of style.layers) {
       if (layer.id.startsWith('zarr-load-lyr-')) {
         this.map!.moveLayer(layer.id);
@@ -1044,288 +1115,8 @@ export class ZarrTesseraSource {
     entry.layerId = null;
   }
 
-  private async updateVisibleChunks(): Promise<void> {
-    if (!this.store || !this.map) return;
-    this.currentAbort?.abort();
-    if (this.enhanceTimer) { clearTimeout(this.enhanceTimer); this.enhanceTimer = null; }
-    this.enhanced = false;
-    const abort = this.currentAbort = new AbortController();
-    const signal = abort.signal;
-
-    // Select optimal pyramid level based on screen resolution
-    const newLevel = this.selectPyramidLevel();
-    if (newLevel !== this.currentPyramidLevel) {
-      this.debug('info', `Pyramid level changed: ${this.currentPyramidLevel} → ${newLevel}`);
-      // Stop any active loading animations and remove their layers
-      for (const [animKey, frameId] of this.loadingAnimations) {
-        cancelAnimationFrame(frameId);
-        const lyr = `zarr-load-lyr-${animKey}`;
-        const src = `zarr-load-src-${animKey}`;
-        try {
-          if (this.map.getLayer(lyr)) this.map.removeLayer(lyr);
-          if (this.map.getSource(src)) this.map.removeSource(src);
-        } catch { /* ignore */ }
-      }
-      this.loadingAnimations.clear();
-      // Remove all chunks from map and clear cache for level change
-      for (const [key] of this.chunkCache) this.removeChunkFromMap(key);
-      this.chunkCache.clear();
-      this.currentPyramidLevel = newLevel;
-    }
-
-    const level = this.currentPyramidLevel;
-    const visible = this.visibleChunkIndices(level);
-    const visibleKeys = new Set(visible.map(([ci, cj]) => this.chunkKey(ci, cj)));
-    this.debug('info', `Viewport: ${visible.length} chunks visible, ${this.chunkCache.size} cached (level ${level})`);
-
-    // Remove off-screen chunks from map (keep in cache)
-    let removed = 0;
-    for (const [key, entry] of this.chunkCache) {
-      if (!visibleKeys.has(key) && entry.sourceId) { this.removeChunkFromMap(key); removed++; }
-    }
-    if (removed) this.debug('info', `Removed ${removed} off-screen chunk layers`);
-
-    // Re-add cached chunks and collect new ones to load
-    const toLoad: [number, number][] = [];
-    for (const [ci, cj] of visible) {
-      const key = this.chunkKey(ci, cj);
-      const entry = this.chunkCache.get(key);
-      if (entry?.canvas && !entry.sourceId) {
-        const ids = this.addChunkToMap(ci, cj, entry.canvas, level);
-        entry.sourceId = ids.sourceId;
-        entry.layerId = ids.layerId;
-      } else if (!entry) {
-        toLoad.push([ci, cj]);
-      }
-    }
-
-    // Sort by distance from center
-    try {
-      const center = this.map.getCenter();
-      const [cE, cN] = this.proj!.forward(center.lng, center.lat);
-      toLoad.sort((a, b) => {
-        const ba = this.chunkUtmBounds(a[0], a[1], level);
-        const bb = this.chunkUtmBounds(b[0], b[1], level);
-        const da = Math.hypot((ba.minE + ba.maxE) / 2 - cE, (ba.minN + ba.maxN) / 2 - cN);
-        const db = Math.hypot((bb.minE + bb.maxE) / 2 - cE, (bb.minN + bb.maxN) / 2 - cN);
-        return da - db;
-      });
-    } catch { /* keep original order */ }
-
-    if (toLoad.length > this.opts.maxLoadPerUpdate) {
-      this.debug('info', `Clamping load queue: ${toLoad.length} -> ${this.opts.maxLoadPerUpdate}`);
-      toLoad.length = this.opts.maxLoadPerUpdate;
-    }
-    if (toLoad.length > 0) this.debug('fetch', `Loading ${toLoad.length} chunks (concurrency=${this.opts.concurrency})`);
-
-    // Determine preview mode — at pyramid levels, preview must be available
-    // (selectPyramidLevel only returns >0 when pyramids exist for current preview mode)
-    const usePreview =
-      (this.opts.preview === 'pca' && this.store.meta.hasPca) ||
-      (this.opts.preview === 'rgb' && this.store.meta.hasRgb);
-    // At pyramid levels, always use preview (embeddings only exist at level 0)
-    const effectiveUsePreview = level > 0 ? true : usePreview;
-
-    this.emit('loading', { total: toLoad.length, done: 0 });
-    let done = 0;
-
-    for (let i = 0; i < toLoad.length; i += this.opts.concurrency) {
-      if (signal.aborted) break;
-      const batch = toLoad.slice(i, i + this.opts.concurrency);
-      await Promise.all(batch.map(([ci, cj]) =>
-        this.loadChunk(ci, cj, signal, effectiveUsePreview, level).then(() => {
-          done++;
-          this.emit('loading', { total: toLoad.length, done });
-        })
-      ));
-    }
-
-    // LRU eviction
-    if (this.chunkCache.size > this.opts.maxCached) {
-      const keys = [...this.chunkCache.keys()];
-      for (let i = 0; i < keys.length && this.chunkCache.size > this.opts.maxCached; i++) {
-        if (!visibleKeys.has(keys[i])) {
-          this.removeChunkFromMap(keys[i]);
-          this.chunkCache.delete(keys[i]);
-        }
-      }
-    }
-
-    // Schedule enhance pass after tiles are visible for a moment
-    if (!signal.aborted && !this.enhanced) {
-      if (this.enhanceTimer) clearTimeout(this.enhanceTimer);
-      this.enhanceTimer = setTimeout(() => {
-        this.enhanceTimer = null;
-        if (!this.enhanced) this.enhanceVisibleChunks();
-      }, 300);
-    }
-  }
-
-  /** Re-render all visible cached chunks with enhanced colors (percentile + saturation + gamma). */
-  private async enhanceVisibleChunks(): Promise<void> {
-    if (!this.workerPool || !this.store || !this.map) return;
-    this.enhanced = true;
-    const level = this.currentPyramidLevel;
-    const visible = this.visibleChunkIndices(level);
-    const tasks: Promise<void>[] = [];
-
-    for (const [ci, cj] of visible) {
-      const key = this.chunkKey(ci, cj);
-      const entry = this.chunkCache.get(key);
-      if (!entry || !entry.sourceId) continue; // not on map
-
-      const { r0, r1, c0, c1 } = this.chunkPixelBounds(ci, cj, level);
-      const h = r1 - r0;
-      const w = c1 - c0;
-      const corners = this.chunkCorners(ci, cj, level);
-
-      if (entry.embRaw && entry.scalesRaw) {
-        // Re-render embedding tile with enhance
-        const embCopy = entry.embRaw.slice().buffer;
-        const scalesCopy = entry.scalesRaw.slice().buffer;
-
-        const task = this.workerPool.dispatch({
-          type: 'render-emb', embRaw: embCopy, scalesRaw: scalesCopy,
-          width: w, height: h, nBands: this.store.meta.nBands, bands: this.opts.bands,
-          enhance: true,
-        }, [embCopy, scalesCopy]).then((result) => {
-          if (!this.enhanced) return; // aborted by new move
-          entry.embRaw = new Uint8Array(result.embRaw as ArrayBuffer);
-          entry.scalesRaw = new Uint8Array(result.scalesRaw as ArrayBuffer);
-          if ((result.nValid as number) > 0 && entry.sourceId) {
-            const canvas = this.rgbaToCanvas(result.rgba as ArrayBuffer, w, h);
-            entry.canvas = canvas;
-            const src = this.map?.getSource(entry.sourceId) as
-              { updateImage?: (opts: { url: string; coordinates: [number, number][] }) => void } | undefined;
-            src?.updateImage?.({ url: canvas.toDataURL('image/png'), coordinates: corners });
-          }
-        });
-        tasks.push(task);
-      } else if (entry.rgbRaw) {
-        // Re-render RGB/PCA preview tile with enhance
-        const rgbData = entry.rgbRaw.slice().buffer;
-
-        const task = this.workerPool.dispatch({
-          type: 'render-rgb', rgbData, width: w, height: h, enhance: true,
-        }, [rgbData]).then((result) => {
-          if (!this.enhanced) return;
-          if ((result.nValid as number) > 0 && entry.sourceId) {
-            const canvas = this.rgbaToCanvas(result.rgba as ArrayBuffer, w, h);
-            entry.canvas = canvas;
-            const src = this.map?.getSource(entry.sourceId) as
-              { updateImage?: (opts: { url: string; coordinates: [number, number][] }) => void } | undefined;
-            src?.updateImage?.({ url: canvas.toDataURL('image/png'), coordinates: corners });
-          }
-        });
-        tasks.push(task);
-      }
-    }
-
-    if (tasks.length > 0) {
-      this.debug('render', `Enhancing ${tasks.length} visible tiles`);
-      await Promise.all(tasks);
-    }
-  }
-
-  private async loadChunk(
-    ci: number, cj: number, signal: AbortSignal, usePreview: boolean, level = 0,
-  ): Promise<void> {
-    const key = this.chunkKey(ci, cj);
-    if (this.chunkCache.has(key)) return;
-
-    try {
-      const { r0, r1, c0, c1 } = this.chunkPixelBounds(ci, cj, level);
-      const h = r1 - r0;
-      const w = c1 - c0;
-
-      let result: Record<string, unknown>;
-      let rgbRawSaved: Uint8Array | null = null;
-
-      if (usePreview && !this.clickedChunks.has(key)) {
-        // Select preview array based on pyramid level
-        let previewArr: ZarrStore['rgbArr'] | undefined;
-        if (level === 0) {
-          previewArr = this.opts.preview === 'pca'
-            ? this.store!.pcaArr : this.store!.rgbArr;
-        } else {
-          previewArr = this.opts.preview === 'pca'
-            ? this.store!.pcaPyramidArrs.get(level)
-            : this.store!.rgbPyramidArrs.get(level);
-        }
-        if (!previewArr) {
-          this.debug('error', `Chunk (${ci},${cj}): no preview array at level ${level}, preview=${this.opts.preview}`);
-          return;
-        }
-        const rgbView = await fetchRegion(previewArr, [[r0, r1], [c0, c1], null]);
-        if (signal.aborted) return;
-        const rgbBytes = new Uint8Array(
-          rgbView.data.buffer, rgbView.data.byteOffset, rgbView.data.byteLength,
-        ).slice();
-        rgbRawSaved = rgbBytes; // keep a copy for enhance pass
-        const rgbData = rgbBytes.slice().buffer; // transfer copy to worker
-
-        result = await this.workerPool!.dispatch({
-          type: 'render-rgb', rgbData, width: w, height: h, enhance: false,
-        }, [rgbData]);
-      } else {
-        // Embeddings always load from full-res (level 0)
-        const bounds0 = this.chunkPixelBounds(ci, cj, 0);
-        const [embView, scalesView] = await Promise.all([
-          fetchRegion(this.store!.embArr, [[bounds0.r0, bounds0.r1], [bounds0.c0, bounds0.c1], null]),
-          fetchRegion(this.store!.scalesArr, [[bounds0.r0, bounds0.r1], [bounds0.c0, bounds0.c1]]),
-        ]);
-        if (signal.aborted) return;
-        const embBuf = new Int8Array(
-          embView.data.buffer, embView.data.byteOffset, embView.data.byteLength,
-        ).slice().buffer;
-        const scalesBuf = new Uint8Array(
-          new Float32Array(scalesView.data.buffer, scalesView.data.byteOffset, scalesView.data.byteLength).buffer,
-        ).slice().buffer;
-
-        const w0 = bounds0.c1 - bounds0.c0;
-        const h0 = bounds0.r1 - bounds0.r0;
-        result = await this.workerPool!.dispatch({
-          type: 'render-emb', embRaw: embBuf, scalesRaw: scalesBuf,
-          width: w0, height: h0,
-          nBands: this.store!.meta.nBands, bands: this.opts.bands,
-          enhance: false,
-        }, [embBuf, scalesBuf]);
-      }
-
-      // Check again after worker dispatch — viewport may have moved
-      if (signal.aborted) return;
-
-      let canvas: HTMLCanvasElement | null = null;
-      let sourceId: string | null = null;
-      let layerId: string | null = null;
-
-      if ((result.nValid as number) > 0) {
-        canvas = this.rgbaToCanvas(result.rgba as ArrayBuffer, w, h);
-        ({ sourceId, layerId } = this.addChunkToMap(ci, cj, canvas, level));
-      }
-
-      this.chunkCache.set(key, {
-        ci, cj,
-        embRaw: (result.embRaw as ArrayBuffer) ? new Uint8Array(result.embRaw as ArrayBuffer) : null,
-        scalesRaw: (result.scalesRaw as ArrayBuffer) ? new Uint8Array(result.scalesRaw as ArrayBuffer) : null,
-        rgbRaw: rgbRawSaved,
-        canvas, sourceId, layerId, isPreview: usePreview,
-      });
-      this.totalLoaded++;
-      this.debug('render', `Chunk (${ci},${cj}): ${(result.nValid as number)} valid px, preview=${usePreview}, level=${level}`);
-      this.emit('chunk-loaded', { ci, cj });
-    } catch (err) {
-      if ((err as Error).name === 'AbortError') return;
-      this.debug('error', `Chunk (${ci},${cj}) failed: ${(err as Error).message}`);
-      console.warn(`Failed to load chunk (${ci},${cj}):`, err);
-      this.chunkCache.set(key, {
-        ci, cj, embRaw: null, scalesRaw: null, rgbRaw: null,
-        canvas: null, sourceId: null, layerId: null, isPreview: false,
-      });
-    }
-  }
-
-  private async reRenderChunks(): Promise<void> {
+  /** Re-render embedding (double-clicked) chunks with new band selection. */
+  private async reRenderEmbeddingChunks(): Promise<void> {
     if (!this.workerPool || !this.store) return;
     const tasks: Promise<void>[] = [];
 
@@ -1387,21 +1178,19 @@ export class ZarrTesseraSource {
       },
     });
 
-    // Chunk grid
+    // Chunk grid — always show level-0 (full-res) grid (that's what matters for double-click embeddings)
     const cs = this.store.meta.chunkShape;
     const s = this.store.meta.shape;
     const nRows = Math.ceil(s[0] / cs[0]);
     const nCols = Math.ceil(s[1] / cs[1]);
-    const features: GeoJSON.Feature[] = [];
+    const gridFeatures: GeoJSON.Feature[] = [];
 
     for (let ci = 0; ci < nRows; ci++) {
       for (let cj = 0; cj < nCols; cj++) {
-        const hasData = this.store.chunkManifest
-          ? this.store.chunkManifest.has(`${ci}_${cj}`) : true;
         const corners = this.chunkCorners(ci, cj);
-        features.push({
+        gridFeatures.push({
           type: 'Feature',
-          properties: { ci, cj, hasData },
+          properties: { ci, cj },
           geometry: {
             type: 'Polygon',
             coordinates: [[corners[0], corners[1], corners[2], corners[3], corners[0]]],
@@ -1412,7 +1201,7 @@ export class ZarrTesseraSource {
 
     this.map.addSource('chunk-grid', {
       type: 'geojson',
-      data: { type: 'FeatureCollection', features },
+      data: { type: 'FeatureCollection', features: gridFeatures },
     });
 
     const gridVis = this.opts.gridVisible ? 'visible' : 'none';
@@ -1420,12 +1209,13 @@ export class ZarrTesseraSource {
     this.map.addLayer({
       id: 'chunk-grid-lines', type: 'line', source: 'chunk-grid',
       paint: {
-        'line-color': ['case', ['get', 'hasData'], '#00e5ff', '#374151'],
-        'line-width': ['case', ['get', 'hasData'], 1, 0.5],
-        'line-opacity': ['case', ['get', 'hasData'], 0.4, 0.2],
+        'line-color': '#00e5ff',
+        'line-width': 1,
+        'line-opacity': 0.3,
       },
       layout: { visibility: gridVis },
     });
+
     this.map.addLayer({
       id: 'utm-zone-line', type: 'line', source: 'utm-zone',
       paint: { 'line-color': '#39ff14', 'line-width': 2, 'line-opacity': 0.5, 'line-dasharray': [6, 4] },
