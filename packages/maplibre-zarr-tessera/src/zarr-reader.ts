@@ -7,8 +7,6 @@ export interface ZarrStore {
   scalesArr: zarr.Array<zarr.DataType>;
   rgbArr: zarr.Array<zarr.DataType> | null;
   pcaArr: zarr.Array<zarr.DataType> | null;
-  rgbMercatorArrs: Map<number, zarr.Array<zarr.DataType>>;
-  pcaMercatorArrs: Map<number, zarr.Array<zarr.DataType>>;
   chunkManifest: Set<string> | null;
 }
 
@@ -73,39 +71,6 @@ export async function openStore(url: string): Promise<ZarrStore> {
     }
   } catch { /* no manifest */ }
 
-  // Detect Web Mercator pyramid arrays
-  const rgbMercatorArrs = new Map<number, zarr.Array<zarr.DataType>>();
-  const pcaMercatorArrs = new Map<number, zarr.Array<zarr.DataType>>();
-  let hasRgbMercator = !!(attrs.has_rgb_mercator);
-  let hasPcaMercator = !!(attrs.has_pca_rgb_mercator);
-  const rgbMercZoomRange = (attrs.rgb_mercator_zoom_range as [number, number]) || null;
-  const pcaMercZoomRange = (attrs.pca_rgb_mercator_zoom_range as [number, number]) || null;
-  const mercatorZoomRange = rgbMercZoomRange ?? pcaMercZoomRange;
-
-  if (hasRgbMercator && rgbMercZoomRange) {
-    for (let z = rgbMercZoomRange[0]; z <= rgbMercZoomRange[1]; z++) {
-      try {
-        const arr = await zarr.open(rootLoc.resolve(`rgb_mercator/${z}`), { kind: 'array' });
-        rgbMercatorArrs.set(z, arr);
-      } catch {
-        break;
-      }
-    }
-    if (rgbMercatorArrs.size === 0) hasRgbMercator = false;
-  }
-
-  if (hasPcaMercator && pcaMercZoomRange) {
-    for (let z = pcaMercZoomRange[0]; z <= pcaMercZoomRange[1]; z++) {
-      try {
-        const arr = await zarr.open(rootLoc.resolve(`pca_rgb_mercator/${z}`), { kind: 'array' });
-        pcaMercatorArrs.set(z, arr);
-      } catch {
-        break;
-      }
-    }
-    if (pcaMercatorArrs.size === 0) hasPcaMercator = false;
-  }
-
   const meta: StoreMetadata = {
     url,
     utmZone,
@@ -117,13 +82,9 @@ export async function openStore(url: string): Promise<ZarrStore> {
     hasRgb,
     hasPca,
     pcaExplainedVariance: attrs.pca_explained_variance as number[] | undefined,
-    hasRgbMercator,
-    hasPcaMercator,
-    mercatorZoomRange,
-    pyramidBasePixelSize: Math.abs(transform[0]),
   };
 
-  return { meta, embArr, scalesArr, rgbArr, pcaArr, rgbMercatorArrs, pcaMercatorArrs, chunkManifest };
+  return { meta, embArr, scalesArr, rgbArr, pcaArr, chunkManifest };
 }
 
 /** Fetch a typed-array region from a zarr array using zarrita slicing. */

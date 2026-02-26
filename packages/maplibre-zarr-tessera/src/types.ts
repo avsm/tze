@@ -23,11 +23,6 @@ export interface StoreMetadata {
   hasRgb: boolean;
   hasPca: boolean;
   pcaExplainedVariance?: number[];
-  // Mercator pyramids
-  hasRgbMercator: boolean;
-  hasPcaMercator: boolean;
-  mercatorZoomRange: [number, number] | null;  // [minZoom, maxZoom]
-  pyramidBasePixelSize: number;
 }
 
 export interface ChunkBounds {
@@ -52,6 +47,7 @@ export interface CachedChunk {
   canvas: HTMLCanvasElement | null;
   sourceId: string | null;
   layerId: string | null;
+  isPreview: boolean;
 }
 
 export type PreviewMode = 'rgb' | 'pca' | 'bands';
