@@ -8,5 +8,6 @@ export const opacity = writable(0.8);
 export const preview = writable<'rgb' | 'pca' | 'bands'>('rgb');
 export const loading = writable({ total: 0, done: 0 });
 export const status = writable('Ready');
+export const globalPreviewUrl = writable<string>('/zarr/v0/global_rgb_2025.zarr');
 export const gridVisible = writable(true);
 export const utmBoundaryVisible = writable(true);
