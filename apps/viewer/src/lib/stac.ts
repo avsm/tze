@@ -20,8 +20,14 @@ async function fetchJson(url: string, signal?: AbortSignal): Promise<unknown> {
  * Fetch a STAC catalog and walk its children/items to discover all UTM zone zarr stores.
  * Returns an array of ZoneDescriptor sorted by utmZone.
  */
-export async function loadCatalog(catalogUrl: string, signal?: AbortSignal): Promise<ZoneDescriptor[]> {
+export interface CatalogResult {
+  zones: ZoneDescriptor[];
+  globalPreviewUrl: string | null;
+}
+
+export async function loadCatalog(catalogUrl: string, signal?: AbortSignal): Promise<CatalogResult> {
   const zones: ZoneDescriptor[] = [];
+  let globalPreviewUrl: string | null = null;
 
   // 1. Fetch and parse the root catalog
   const catalogData = await fetchJson(catalogUrl, signal);
@@ -63,7 +69,23 @@ export async function loadCatalog(catalogUrl: string, signal?: AbortSignal): Pro
 
   // Sort by UTM zone number
   zones.sort((a, b) => a.utmZone - b.utmZone);
-  return zones;
+
+  // Probe for global preview store next to the catalog
+  const baseUrl = catalogUrl.replace(/\/[^/]*$/, '/');
+  // Find the latest year from discovered zones
+  const years = [...new Set(zones.map(z => z.id.match(/_(\d{4})$/)?.[1]).filter(Boolean))].sort();
+  const latestYear = years[years.length - 1] ?? '2025';
+  const candidateUrl = `${baseUrl}global_rgb_${latestYear}.zarr`;
+  try {
+    const probe = await fetch(`${candidateUrl}/zarr.json`, { method: 'HEAD', signal });
+    if (probe.ok) {
+      globalPreviewUrl = candidateUrl;
+    }
+  } catch {
+    // Global preview not available — that's fine
+  }
+
+  return { zones, globalPreviewUrl };
 }
 
 /** Simple point-in-bbox test (WGS84). */
