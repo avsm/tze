@@ -837,6 +837,9 @@ export class ZarrTesseraSource {
 
   private async updateVisibleChunks(): Promise<void> {
     if (!this.store || !this.map) return;
+    // When zarr-layer handles preview, skip legacy chunk loading
+    // (double-click embedding loading via loadFullChunk is separate)
+    if (this.previewLayer) return;
     this.currentAbort?.abort();
     const abort = this.currentAbort = new AbortController();
     const signal = abort.signal;
@@ -1050,45 +1053,47 @@ export class ZarrTesseraSource {
       },
     });
 
-    // Chunk grid
-    const cs = this.store.meta.chunkShape;
-    const s = this.store.meta.shape;
-    const nRows = Math.ceil(s[0] / cs[0]);
-    const nCols = Math.ceil(s[1] / cs[1]);
-    const features: GeoJSON.Feature[] = [];
+    // Chunk grid (skip when zarr-layer handles preview)
+    if (!this.opts.globalPreviewUrl) {
+      const cs = this.store.meta.chunkShape;
+      const s = this.store.meta.shape;
+      const nRows = Math.ceil(s[0] / cs[0]);
+      const nCols = Math.ceil(s[1] / cs[1]);
+      const features: GeoJSON.Feature[] = [];
 
-    for (let ci = 0; ci < nRows; ci++) {
-      for (let cj = 0; cj < nCols; cj++) {
-        const hasData = this.store.chunkManifest
-          ? this.store.chunkManifest.has(`${ci}_${cj}`) : true;
-        const corners = this.chunkCorners(ci, cj);
-        features.push({
-          type: 'Feature',
-          properties: { ci, cj, hasData },
-          geometry: {
-            type: 'Polygon',
-            coordinates: [[corners[0], corners[1], corners[2], corners[3], corners[0]]],
-          },
-        });
+      for (let ci = 0; ci < nRows; ci++) {
+        for (let cj = 0; cj < nCols; cj++) {
+          const hasData = this.store.chunkManifest
+            ? this.store.chunkManifest.has(`${ci}_${cj}`) : true;
+          const corners = this.chunkCorners(ci, cj);
+          features.push({
+            type: 'Feature',
+            properties: { ci, cj, hasData },
+            geometry: {
+              type: 'Polygon',
+              coordinates: [[corners[0], corners[1], corners[2], corners[3], corners[0]]],
+            },
+          });
+        }
       }
+
+      this.map.addSource('chunk-grid', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features },
+      });
+
+      const gridVis = this.opts.gridVisible ? 'visible' : 'none';
+
+      this.map.addLayer({
+        id: 'chunk-grid-lines', type: 'line', source: 'chunk-grid',
+        paint: {
+          'line-color': ['case', ['get', 'hasData'], '#00e5ff', '#374151'],
+          'line-width': ['case', ['get', 'hasData'], 1, 0.5],
+          'line-opacity': ['case', ['get', 'hasData'], 0.4, 0.2],
+        },
+        layout: { visibility: gridVis },
+      });
     }
-
-    this.map.addSource('chunk-grid', {
-      type: 'geojson',
-      data: { type: 'FeatureCollection', features },
-    });
-
-    const gridVis = this.opts.gridVisible ? 'visible' : 'none';
-
-    this.map.addLayer({
-      id: 'chunk-grid-lines', type: 'line', source: 'chunk-grid',
-      paint: {
-        'line-color': ['case', ['get', 'hasData'], '#00e5ff', '#374151'],
-        'line-width': ['case', ['get', 'hasData'], 1, 0.5],
-        'line-opacity': ['case', ['get', 'hasData'], 0.4, 0.2],
-      },
-      layout: { visibility: gridVis },
-    });
     this.map.addLayer({
       id: 'utm-zone-line', type: 'line', source: 'utm-zone',
       paint: { 'line-color': '#39ff14', 'line-width': 2, 'line-opacity': 0.5, 'line-dasharray': [6, 4] },
