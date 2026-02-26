@@ -10,6 +10,8 @@ export interface ZarrTesseraOptions {
   concurrency?: number;
   gridVisible?: boolean;
   utmBoundaryVisible?: boolean;
+  /** URL for the global EPSG:4326 preview store (used by @carbonplan/zarr-layer) */
+  globalPreviewUrl?: string;
 }
 
 export interface StoreMetadata {

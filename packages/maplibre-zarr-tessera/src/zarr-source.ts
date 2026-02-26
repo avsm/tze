@@ -7,6 +7,7 @@ import type {
 import { UtmProjection } from './projection.js';
 import { openStore, fetchRegion, type ZarrStore } from './zarr-reader.js';
 import { WorkerPool } from './worker-pool.js';
+import { ZarrLayer } from '@carbonplan/zarr-layer';
 
 type EventCallback<T> = (data: T) => void;
 
@@ -18,6 +19,7 @@ export class ZarrTesseraSource {
   private workerPool: WorkerPool | null = null;
   private chunkCache = new Map<string, CachedChunk>();
   private currentAbort: AbortController | null = null;
+  private previewLayer: any | null = null;
 
 
   private totalLoaded = 0;
@@ -42,6 +44,7 @@ export class ZarrTesseraSource {
       concurrency: options.concurrency ?? 4,
       gridVisible: options.gridVisible ?? true,
       utmBoundaryVisible: options.utmBoundaryVisible ?? true,
+      globalPreviewUrl: options.globalPreviewUrl ?? '',
     };
   }
 
@@ -64,6 +67,11 @@ export class ZarrTesseraSource {
 
       // Add overlays
       this.addOverlays();
+
+      // Add zarr-layer preview if global preview URL is configured
+      if (this.opts.globalPreviewUrl) {
+          this.addPreviewLayer();
+      }
 
       // Listen for viewport changes
       this.moveHandler = () => this.updateVisibleChunks();
@@ -92,6 +100,16 @@ export class ZarrTesseraSource {
   }
 
   remove(): void {
+    // Remove zarr-layer preview
+    if (this.previewLayer && this.map) {
+        try {
+            this.map.removeLayer(this.previewLayer.id);
+        } catch (e) {
+            // Layer may already be removed
+        }
+        this.previewLayer = null;
+    }
+
     if (this.moveHandler && this.map) {
       this.map.off('moveend', this.moveHandler);
     }
@@ -129,6 +147,9 @@ export class ZarrTesseraSource {
         this.map.setPaintProperty(layer.id, 'raster-opacity', opacity);
       }
     }
+    if (this.previewLayer) {
+        this.previewLayer.setOpacity(opacity);
+    }
   }
 
   setPreview(mode: PreviewMode): void {
@@ -137,6 +158,10 @@ export class ZarrTesseraSource {
     for (const [key] of this.chunkCache) this.removeChunkFromMap(key);
     this.chunkCache.clear();
     this.updateVisibleChunks();
+    if (this.previewLayer && this.opts.globalPreviewUrl) {
+        const newVar = mode === 'pca' ? 'pca_rgb' : 'rgb';
+        this.previewLayer.setVariable(newVar);
+    }
   }
 
   setGridVisible(visible: boolean): void {
@@ -1079,5 +1104,35 @@ export class ZarrTesseraSource {
     if (this.map?.getSource('utm-zone')) this.map.removeSource('utm-zone');
     if (this.map?.getSource('chunk-grid')) this.map.removeSource('chunk-grid');
     if (this.map?.getSource('emb-highlight')) this.map.removeSource('emb-highlight');
+  }
+
+  private addPreviewLayer(): void {
+    if (!this.map || !this.opts.globalPreviewUrl) return;
+
+    const previewVar = this.opts.preview === 'pca' ? 'pca_rgb' : 'rgb';
+
+    this.previewLayer = new ZarrLayer({
+        id: `zarr-preview-${Date.now()}`,
+        source: this.opts.globalPreviewUrl,
+        variable: previewVar,
+        selector: { band: [0, 1, 2, 3] },
+        clim: [0, 255],
+        colormap: ['#000000', '#ffffff'],
+        customFrag: `
+            float r = band_0 / 255.0;
+            float g = band_1 / 255.0;
+            float b = band_2 / 255.0;
+            float a = band_3 / 255.0;
+            fragColor = vec4(r, g, b, a * opacity);
+            fragColor.rgb *= fragColor.a;
+        `,
+        opacity: this.opts.opacity,
+        zarrVersion: 3,
+        spatialDimensions: { lat: 'lat', lon: 'lon' },
+    });
+
+    // ZarrLayer implements MapLibre's CustomLayerInterface
+    this.map.addLayer(this.previewLayer as any);
+    this.debug('info', `Preview layer added via zarr-layer (${previewVar})`);
   }
 }
