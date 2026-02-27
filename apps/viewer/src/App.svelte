@@ -15,6 +15,7 @@
   import { activeTool } from './stores/tools';
   import { zones, activeZoneId, switchZone } from './stores/stac';
   import { pointInBbox } from './lib/stac';
+  import { segmentPolygons, segmentVisible } from './stores/segmentation';
 
   let mapContainer: HTMLDivElement;
   let labelMarkers: maplibregl.Marker[] = [];
@@ -59,6 +60,24 @@
         type: 'line',
         source: 'tile-hover',
         paint: { 'line-color': '#00e5ff', 'line-width': 1.5, 'line-opacity': 0.5 },
+      });
+
+      // Segmentation polygon layers
+      map.addSource('segment-polygons', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+      map.addLayer({
+        id: 'segment-polygons-fill',
+        type: 'fill',
+        source: 'segment-polygons',
+        paint: { 'fill-color': '#f97316', 'fill-opacity': 0.3 },
+      });
+      map.addLayer({
+        id: 'segment-polygons-line',
+        type: 'line',
+        source: 'segment-polygons',
+        paint: { 'line-color': '#f97316', 'line-width': 1.5, 'line-opacity': 0.8 },
       });
     });
 
@@ -246,6 +265,19 @@
       0.6,
       0,
     ]);
+  });
+
+  // Update segmentation polygon layers when store changes
+  $effect(() => {
+    const map = $mapInstance;
+    const geojson = $segmentPolygons;
+    const visible = $segmentVisible;
+    if (!map) return;
+    const src = map.getSource('segment-polygons') as maplibregl.GeoJSONSource | undefined;
+    if (src) src.setData(geojson);
+    const vis = visible ? 'visible' : 'none';
+    if (map.getLayer('segment-polygons-fill')) map.setLayoutProperty('segment-polygons-fill', 'visibility', vis);
+    if (map.getLayer('segment-polygons-line')) map.setLayoutProperty('segment-polygons-line', 'visibility', vis);
   });
 </script>
 

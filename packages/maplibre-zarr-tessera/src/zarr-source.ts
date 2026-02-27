@@ -299,16 +299,26 @@ export class ZarrTesseraSource {
         canvas, sourceId, layerId, isPreview: false,
       });
 
-      // Store typed views for classification
+      // Dequantize: float32 = int8 * scale (per-pixel scale factor)
+      const embF32 = new Float32Array(h * w * nBands);
+      for (let i = 0; i < h * w; i++) {
+        const s = scalesF32[i];
+        const valid = s && !isNaN(s) && isFinite(s);
+        for (let b = 0; b < nBands; b++) {
+          embF32[i * nBands + b] = valid ? embInt8[i * nBands + b] * s : 0;
+        }
+      }
+
+      // Store dequantized embeddings for classification/segmentation
       this.embeddingCache.set(key, {
         ci, cj,
-        emb: embInt8,
+        emb: embF32,
         scales: scalesF32,
         width: w, height: h,
         nBands,
       });
-      this.debug('info', `Embeddings ready (${ci},${cj}): ${(embInt8.byteLength / 1024).toFixed(0)} KB cached`);
-      this.emit('embedding-progress', { ci, cj, stage: 'done', bytes: embInt8.byteLength });
+      this.debug('info', `Embeddings ready (${ci},${cj}): ${(embF32.byteLength / 1024).toFixed(0)} KB cached`);
+      this.emit('embedding-progress', { ci, cj, stage: 'done', bytes: embF32.byteLength });
       this.emit('embeddings-loaded', { ci, cj });
 
       // Update embedding highlight border on map

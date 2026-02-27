@@ -82,7 +82,7 @@ export interface ZarrTesseraEvents {
 export interface TileEmbeddings {
   ci: number;
   cj: number;
-  emb: Int8Array;         // [h * w * nBands] raw embedding bytes
+  emb: Float32Array;      // [h * w * nBands] dequantized float32 embeddings
   scales: Float32Array;   // [h * w] scale values
   width: number;
   height: number;
