@@ -76,10 +76,6 @@ export function addLabel(
   }]);
 }
 
-export function removeLabel(index: number): void {
-  labels.update(ls => ls.filter((_, i) => i !== index));
-}
-
 export function clearLabels(): void {
   labels.set([]);
   isClassified.set(false);
@@ -139,18 +135,3 @@ export function importOsmLabels(
   return { classesCreated, labelsImported };
 }
 
-export function exportLabelsJson(): string {
-  const cs = get(classes);
-  const ls = get(labels);
-  return JSON.stringify({
-    classes: cs,
-    labels: ls.map(l => ({
-      lngLat: l.lngLat,
-      ci: l.ci, cj: l.cj,
-      row: l.row, col: l.col,
-      classId: l.classId,
-    })),
-    k: get(kValue),
-    confidenceThreshold: get(confidenceThreshold),
-  }, null, 2);
-}

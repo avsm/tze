@@ -29,9 +29,7 @@ self.onmessage = function(e) {
   if (msg.type === 'render-emb') {
     const { embRaw, scalesRaw, width, height, nBands, bands, id } = msg;
     const embInt8 = new Int8Array(embRaw);
-    const scalesBuf = new ArrayBuffer(new Uint8Array(scalesRaw).byteLength);
-    new Uint8Array(scalesBuf).set(new Uint8Array(scalesRaw));
-    const scalesF32 = new Float32Array(scalesBuf);
+    const scalesF32 = new Float32Array(scalesRaw);
 
     const [bR, bG, bB] = bands;
     let minR = 127, maxR = -128, minG = 127, maxG = -128, minB = 127, maxB = -128;

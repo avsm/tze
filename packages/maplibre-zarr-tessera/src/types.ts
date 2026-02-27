@@ -1,5 +1,3 @@
-import type { Map as MaplibreMap } from 'maplibre-gl';
-
 export interface ZarrTesseraOptions {
   url: string;
   bands?: [number, number, number];

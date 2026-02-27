@@ -110,9 +110,8 @@
       worker = null;
     };
 
-    w.onerror = (err) => {
+    w.onerror = () => {
       if (worker !== w) return;
-      console.error('UMAP worker error:', err);
       status = 'UMAP failed';
       w.terminate();
       worker = null;

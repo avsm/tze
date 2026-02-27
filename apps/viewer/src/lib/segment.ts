@@ -33,14 +33,11 @@ const probabilityCache = new Map<string, {
 
 async function getSession(): Promise<ort.InferenceSession> {
   if (cachedSession) return cachedSession;
-  console.log('[segment] Creating ONNX inference session...');
   try {
     cachedSession = await ort.InferenceSession.create('/models/solar_unet.onnx', {
       executionProviders: ['wasm'],
     });
-    console.log('[segment] ONNX session created, inputs:', cachedSession.inputNames, 'outputs:', cachedSession.outputNames);
   } catch (err) {
-    console.error('[segment] Failed to create ONNX session:', err);
     throw err;
   }
   return cachedSession;
@@ -48,11 +45,9 @@ async function getSession(): Promise<ort.InferenceSession> {
 
 async function getStats(): Promise<ModelStats> {
   if (cachedStats) return cachedStats;
-  console.log('[segment] Fetching model stats...');
   const resp = await fetch('/models/solar_unet_stats.json');
   if (!resp.ok) throw new Error(`Failed to fetch stats: ${resp.status} ${resp.statusText}`);
   cachedStats = await resp.json();
-  console.log('[segment] Stats loaded, mean length:', cachedStats!.mean.length, 'std length:', cachedStats!.std.length);
   return cachedStats!;
 }
 
@@ -66,8 +61,6 @@ export async function runSolarSegmentation(
   threshold = 0.5,
   onProgress?: (done: number, total: number) => void,
 ): Promise<SegmentResult[]> {
-  console.log('[segment] Starting segmentation, tiles:', embeddingCache.size, 'threshold:', threshold);
-
   const [session, stats] = await Promise.all([getSession(), getStats()]);
 
   const mean = new Float32Array(stats.mean);
@@ -85,12 +78,10 @@ export async function runSolarSegmentation(
         count++;
       }
     }
-    console.log(`[segment] Tile ${key}: ${width}x${height}, ${count} patches, emb length: ${tile.emb.length}, nBands: ${tile.nBands}`);
     tileInfos.push({ key, tile, patchCount: count });
     totalPatches += count;
   }
 
-  console.log('[segment] Total patches:', totalPatches);
   let patchesDone = 0;
   let patchesSkipped = 0;
   let patchesInferred = 0;
@@ -101,12 +92,13 @@ export async function runSolarSegmentation(
     const { ci, cj, emb, scales, width, height, nBands } = tile;
     const corners = source.getChunkBoundsLngLat(ci, cj);
     if (!corners) {
-      console.warn(`[segment] No corners for chunk (${ci},${cj}), skipping`);
       continue;
     }
 
     const prediction = new Float32Array(height * width);
     const count = new Float32Array(height * width);
+    // Pre-allocate input buffer once per tile — reused across patches
+    const inputData = new Float32Array(nBands * PATCH_SIZE * PATCH_SIZE);
 
     for (let y = 0; y <= height - PATCH_SIZE; y += STRIDE) {
       for (let x = 0; x <= width - PATCH_SIZE; x += STRIDE) {
@@ -128,7 +120,6 @@ export async function runSolarSegmentation(
         }
 
         // Extract, normalize, and transpose patch: [H,W,C] → [1,C,H,W]
-        const inputData = new Float32Array(1 * nBands * PATCH_SIZE * PATCH_SIZE);
         for (let py = 0; py < PATCH_SIZE; py++) {
           for (let px = 0; px < PATCH_SIZE; px++) {
             const srcIdx = ((y + py) * width + (x + px)) * nBands;
@@ -141,7 +132,7 @@ export async function runSolarSegmentation(
           }
         }
 
-        const inputTensor = new ort.Tensor('float32', inputData, [1, nBands, PATCH_SIZE, PATCH_SIZE]);
+        const inputTensor = new ort.Tensor('float32', inputData.slice(), [1, nBands, PATCH_SIZE, PATCH_SIZE]);
 
         try {
           const results = await session.run({ input: inputTensor });
@@ -160,7 +151,6 @@ export async function runSolarSegmentation(
           }
           patchesInferred++;
         } catch (err) {
-          console.error(`[segment] Inference failed at patch (${x},${y}) of tile ${key}:`, err);
           throw err;
         }
 
@@ -177,28 +167,12 @@ export async function runSolarSegmentation(
       if (count[i] > 0) prediction[i] /= count[i];
     }
 
-    // Log probability distribution
-    let minP = 1, maxP = 0, sumP = 0, nP = 0;
-    for (let i = 0; i < height * width; i++) {
-      if (count[i] > 0) {
-        const p = prediction[i];
-        if (p < minP) minP = p;
-        if (p > maxP) maxP = p;
-        sumP += p;
-        nP++;
-      }
-    }
-    console.log(`[segment] Tile ${key} done: ${patchesInferred} inferred, ${patchesSkipped} skipped, probs: min=${minP.toFixed(4)} max=${maxP.toFixed(4)} mean=${(sumP/nP).toFixed(4)} n=${nP}`);
-
     probabilityCache.set(key, { ci, cj, probs: prediction, width, height, corners });
   }
 
   onProgress?.(totalPatches, totalPatches);
 
-  const results = rethreshold(threshold);
-  const totalPolygons = results.reduce((s, r) => s + r.polygons.length, 0);
-  console.log(`[segment] Complete: ${totalPolygons} polygons from ${results.length} tiles`);
-  return results;
+  return rethreshold(threshold);
 }
 
 /**

@@ -34,8 +34,6 @@
     progressDone = 0;
     progressTotal = 0;
 
-    console.log('[SegmentPanel] handleDetect called, embeddingCache size:', src.embeddingCache.size);
-
     try {
       const results = await runSolarSegmentation(
         src.embeddingCache,
@@ -51,9 +49,7 @@
       resultCount = features.length;
       hasProbs = true;
       $segmentPolygons = { type: 'FeatureCollection', features };
-      console.log('[SegmentPanel] Detection complete, features:', features.length);
     } catch (err) {
-      console.error('[SegmentPanel] Detection failed:', err);
       errorMsg = err instanceof Error ? err.message : String(err);
     } finally {
       isRunning = false;

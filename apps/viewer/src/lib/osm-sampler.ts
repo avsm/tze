@@ -20,7 +20,7 @@ const MAX_SAMPLES_PER_POLYGON = 20;
 const MAX_SAMPLES_PER_CATEGORY = 200;
 
 /** Ray-casting point-in-polygon test. ring is [lng, lat][] (closed or open). */
-export function pointInPolygon(lng: number, lat: number, ring: [number, number][]): boolean {
+function pointInPolygon(lng: number, lat: number, ring: [number, number][]): boolean {
   let inside = false;
   const n = ring.length;
   for (let i = 0, j = n - 1; i < n; j = i++) {

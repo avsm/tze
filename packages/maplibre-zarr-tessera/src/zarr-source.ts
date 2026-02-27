@@ -25,12 +25,11 @@ export class ZarrTesseraSource {
   private currentAbort: AbortController | null = null;
   private previewLayer: any | null = null;
 
-
-  private totalLoaded = 0;
   private clickedChunks = new Set<string>();
   /** Cache of raw 128-d embeddings for tiles loaded via double-click. */
   public embeddingCache = new Map<string, TileEmbeddings>();
   private moveHandler: (() => void) | null = null;
+  private dblclickHandler: ((e: { preventDefault(): void; lngLat: { lng: number; lat: number } }) => void) | null = null;
   private listeners = new Map<string, Set<EventCallback<unknown>>>();
   /** Tracks active loading animations per chunk key → animation frame ID. */
   private loadingAnimations = new Map<string, number>();
@@ -85,7 +84,7 @@ export class ZarrTesseraSource {
       map.on('moveend', this.moveHandler);
 
       // Double-click to load full embeddings for a tile
-      map.on('dblclick', (e) => {
+      this.dblclickHandler = (e) => {
         e.preventDefault();
         const chunk = this.getChunkAtLngLat(e.lngLat.lng, e.lngLat.lat);
         if (!chunk) return;
@@ -96,7 +95,8 @@ export class ZarrTesseraSource {
         }
         this.debug('fetch', `Double-click: loading embeddings for chunk (${chunk.ci},${chunk.cj})`);
         this.loadFullChunk(chunk.ci, chunk.cj);
-      });
+      };
+      map.on('dblclick', this.dblclickHandler);
 
       // Load visible chunks immediately
       this.updateVisibleChunks();
@@ -119,6 +119,9 @@ export class ZarrTesseraSource {
 
     if (this.moveHandler && this.map) {
       this.map.off('moveend', this.moveHandler);
+    }
+    if (this.dblclickHandler && this.map) {
+      this.map.off('dblclick', this.dblclickHandler);
     }
     this.currentAbort?.abort();
     for (const [, frameId] of this.loadingAnimations) cancelAnimationFrame(frameId);
@@ -341,7 +344,6 @@ export class ZarrTesseraSource {
       this.stopLoadingAnimation(ci, cj);
       this.debug('error', `Embedding load (${ci},${cj}) failed: ${(err as Error).message}`);
       this.emit('embedding-progress', { ci, cj, stage: 'done', bytes: 0 });
-      console.error(`loadFullChunk(${ci},${cj}) failed:`, err);
     }
   }
 
@@ -399,12 +401,8 @@ export class ZarrTesseraSource {
     if (!scale || isNaN(scale)) return null;
 
     // Extract embedding vector
-    const nBands = tile.nBands;
-    const offset = pixelIdx * nBands;
-    const embedding = new Float32Array(nBands);
-    for (let b = 0; b < nBands; b++) {
-      embedding[b] = tile.emb[offset + b];
-    }
+    const offset = pixelIdx * tile.nBands;
+    const embedding = tile.emb.slice(offset, offset + tile.nBands);
 
     return { embedding, ci, cj, row, col };
   }
@@ -441,12 +439,8 @@ export class ZarrTesseraSource {
         const scale = tile.scales[pixelIdx];
         if (!scale || isNaN(scale)) continue;
 
-        const nBands = tile.nBands;
-        const offset = pixelIdx * nBands;
-        const embedding = new Float32Array(nBands);
-        for (let b = 0; b < nBands; b++) {
-          embedding[b] = tile.emb[offset + b];
-        }
+        const offset = pixelIdx * tile.nBands;
+        const embedding = tile.emb.slice(offset, offset + tile.nBands);
         results.push({ embedding, ci, cj, row, col });
       }
     }
@@ -1005,20 +999,15 @@ export class ZarrTesseraSource {
   private raiseOverlayLayers(): void {
     const style = this.map!.getStyle();
     if (!style?.layers) return;
-    // Grid fills go above chunk data but below loading/classification
-    // Loading animation overlays above grid lines
+    // Collect layer IDs in a single pass, then move in order
+    const loadLayers: string[] = [];
+    const classLayers: string[] = [];
     for (const layer of style.layers) {
-      if (layer.id.startsWith('zarr-load-lyr-')) {
-        this.map!.moveLayer(layer.id);
-      }
+      if (layer.id.startsWith('zarr-load-lyr-')) loadLayers.push(layer.id);
+      else if (layer.id.startsWith('zarr-class-lyr-')) classLayers.push(layer.id);
     }
-    // Classification overlays above loading
-    for (const layer of style.layers) {
-      if (layer.id.startsWith('zarr-class-lyr-')) {
-        this.map!.moveLayer(layer.id);
-      }
-    }
-    // Highlight, grid lines, UTM on top
+    for (const id of loadLayers) this.map!.moveLayer(id);
+    for (const id of classLayers) this.map!.moveLayer(id);
     if (this.map!.getLayer('emb-highlight-line')) this.map!.moveLayer('emb-highlight-line');
     if (this.map!.getLayer('chunk-grid-lines')) this.map!.moveLayer('chunk-grid-lines');
     if (this.map!.getLayer('utm-zone-line')) this.map!.moveLayer('utm-zone-line');
@@ -1178,13 +1167,11 @@ export class ZarrTesseraSource {
         scalesRaw: (result.scalesRaw as ArrayBuffer) ? new Uint8Array(result.scalesRaw as ArrayBuffer) : null,
         canvas, sourceId, layerId, isPreview: usePreview,
       });
-      this.totalLoaded++;
       this.debug('render', `Chunk (${ci},${cj}): ${(result.nValid as number)} valid px, preview=${usePreview}`);
       this.emit('chunk-loaded', { ci, cj });
     } catch (err) {
       if ((err as Error).name === 'AbortError') return;
       this.debug('error', `Chunk (${ci},${cj}) failed: ${(err as Error).message}`);
-      console.warn(`Failed to load chunk (${ci},${cj}):`, err);
       this.chunkCache.set(key, {
         ci, cj, embRaw: null, scalesRaw: null,
         canvas: null, sourceId: null, layerId: null, isPreview: false,

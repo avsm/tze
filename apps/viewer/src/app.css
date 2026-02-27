@@ -14,5 +14,3 @@ body { margin: 0; padding: 0; overflow: hidden; background: #000; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
 
-@keyframes pulse-glow { 0%,100%{opacity:.4} 50%{opacity:1} }
-.loading-glow { animation: pulse-glow 1.5s ease-in-out infinite; }

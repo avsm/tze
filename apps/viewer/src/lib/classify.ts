@@ -149,13 +149,14 @@ export async function classifyTiles(
       // Read indices back to CPU for voting
       const idxData = await topkIdx.data();
 
-      // Vote and assign colours
+      // Vote and assign colours — reuse a single Map to avoid per-pixel allocation
+      const votes = new Map<number, number>();
       for (let i = 0; i < chunkSize; i++) {
         const pixelIdx = validIndices[chunkStart + i];
         const rgbaIdx = pixelIdx * 4;
 
         // Count votes among k nearest
-        const votes = new Map<number, number>();
+        votes.clear();
         for (let j = 0; j < effectiveK; j++) {
           const trainIdx = idxData[i * effectiveK + j];
           const label = trainLabels[trainIdx];

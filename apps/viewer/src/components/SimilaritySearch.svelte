@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { zarrSource, metadata } from '../stores/zarr';
+  import { zarrSource } from '../stores/zarr';
   import { computeSimilarityScores, renderSimilarityOverlays, type TileSimilarity } from '../lib/similarity';
   import UmapCloud from './UmapCloud.svelte';
 

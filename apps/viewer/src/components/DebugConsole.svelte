@@ -55,8 +55,8 @@
     }
   });
 
-  // Summary stats
-  const stats = $derived(() => {
+  // Summary stats — computed once when logs change
+  const stats = $derived.by(() => {
     const counts = { fetch: 0, render: 0, error: 0 };
     for (const l of logs) {
       if (l.type === 'fetch') counts.fetch++;
@@ -67,13 +67,15 @@
   });
 
   let copied = $state(false);
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
   function copyLogs() {
     const text = logs.map(e =>
       `${formatTime(e.time)} ${TYPE_LABELS[e.type].padEnd(6)} ${e.msg}`
     ).join('\n');
     navigator.clipboard.writeText(text).then(() => {
       copied = true;
-      setTimeout(() => copied = false, 1500);
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => { copied = false; }, 1500);
     });
   }
 </script>
@@ -89,10 +91,10 @@
   >
     <span class="text-gray-600">{expanded ? '▼' : '▲'}</span>
     <span class="text-gray-500 uppercase tracking-wider">Debug</span>
-    <span class="text-yellow-400/60 tabular-nums">{stats().fetch}F</span>
-    <span class="text-green-400/60 tabular-nums">{stats().render}R</span>
-    {#if stats().error > 0}
-      <span class="text-red-400 tabular-nums">{stats().error}E</span>
+    <span class="text-yellow-400/60 tabular-nums">{stats.fetch}F</span>
+    <span class="text-green-400/60 tabular-nums">{stats.render}R</span>
+    {#if stats.error > 0}
+      <span class="text-red-400 tabular-nums">{stats.error}E</span>
     {/if}
     <span class="text-gray-700 ml-auto tabular-nums">{logs.length}</span>
   </button>
