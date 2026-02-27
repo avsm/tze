@@ -10,17 +10,22 @@
     cachedScores: TileSimilarity[];
     refEmbedding: Float32Array;
     selectedPixel: { ci: number; cj: number; row: number; col: number };
+    threshold: number;
+    embeddingTileCount: number;
   }
 
-  let { cachedScores, refEmbedding, selectedPixel }: Props = $props();
+  let { cachedScores, refEmbedding, selectedPixel, threshold, embeddingTileCount }: Props = $props();
 
   let canvasEl: HTMLCanvasElement;
   let renderer: PointCloudRenderer | null = null;
   let worker: Worker | null = null;
   let status = $state('');
+  let currentScores: Float32Array | null = null;
+  let currentRefIndex = -1;
 
-  /** Build RGBA color array: dark blue (score 0) → cyan (score 1), white for ref. */
-  function buildColors(scores: Float32Array, refIndex: number): Uint8Array {
+  /** Build RGBA color array with threshold highlighting.
+   *  Above threshold: bright score color. Below: dimmed. Ref pixel: white. */
+  function buildColors(scores: Float32Array, refIndex: number, thresh: number): Uint8Array {
     const n = scores.length;
     const colors = new Uint8Array(n * 4);
     for (let i = 0; i < n; i++) {
@@ -28,11 +33,19 @@
       const off = i * 4;
       if (i === refIndex) {
         colors[off] = 255; colors[off + 1] = 255; colors[off + 2] = 255; colors[off + 3] = 255;
+      } else if (s >= thresh) {
+        // Above threshold: bright — lerp from cyan (0,220,255) to white (255,255,255)
+        const t = thresh < 1 ? (s - thresh) / (1 - thresh) : 1;
+        colors[off]     = Math.round(40 + 215 * t);
+        colors[off + 1] = Math.round(220 + 35 * t);
+        colors[off + 2] = 255;
+        colors[off + 3] = 255;
       } else {
-        // Dark blue (10,20,80) → cyan (0,255,255)
-        colors[off]     = Math.round(10 * (1 - s));
-        colors[off + 1] = Math.round(20 + 235 * s);
-        colors[off + 2] = Math.round(80 + 175 * s);
+        // Below threshold: warm orange-red graded by score
+        const t = thresh > 0 ? s / thresh : 0;
+        colors[off]     = Math.round(60 + 120 * t);  // 60→180
+        colors[off + 1] = Math.round(20 + 40 * t);   // 20→60
+        colors[off + 2] = Math.round(15 + 15 * t);   // 15→30
         colors[off + 3] = 255;
       }
     }
@@ -82,7 +95,9 @@
       if (worker !== w) return;
 
       const { positions } = e.data;
-      const colors = buildColors(sample.scores, sample.refIndex);
+      currentScores = sample.scores;
+      currentRefIndex = sample.refIndex;
+      const colors = buildColors(sample.scores, sample.refIndex, threshold);
 
       if (!renderer) {
         renderer = new PointCloudRenderer(canvasEl);
@@ -104,14 +119,24 @@
     };
   }
 
-  // Trigger UMAP when cachedScores changes (new pixel click)
+  // Trigger UMAP when cachedScores changes (new pixel click or new tiles loaded)
   $effect(() => {
     // Access reactive deps
     const _scores = cachedScores;
     const _ref = refEmbedding;
     const _pixel = selectedPixel;
+    const _tileCount = embeddingTileCount;
     if (_scores.length > 0 && _ref && _pixel) {
       runUmap();
+    }
+  });
+
+  // Recolor points when threshold changes (no UMAP re-run)
+  $effect(() => {
+    const t = threshold;
+    if (renderer && currentScores) {
+      const colors = buildColors(currentScores, currentRefIndex, t);
+      renderer.updateColors(colors);
     }
   });
 

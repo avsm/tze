@@ -50,16 +50,10 @@
         data: { type: 'FeatureCollection', features: [] },
       });
       map.addLayer({
-        id: 'tile-hover-fill',
-        type: 'fill',
-        source: 'tile-hover',
-        paint: { 'fill-color': '#00e5ff', 'fill-opacity': 0.08 },
-      });
-      map.addLayer({
         id: 'tile-hover-line',
         type: 'line',
         source: 'tile-hover',
-        paint: { 'line-color': '#00e5ff', 'line-width': 1.5, 'line-opacity': 0.5 },
+        paint: { 'line-color': '#00e5ff', 'line-width': 2, 'line-opacity': 0.7 },
       });
 
       // Segmentation polygon layers

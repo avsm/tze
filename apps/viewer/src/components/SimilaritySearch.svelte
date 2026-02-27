@@ -10,13 +10,18 @@
   let refEmbedding = $state<Float32Array | null>(null);
   let cachedScores = $state<TileSimilarity[]>([]);
   let embeddingTileCount = $state(0);
+  let pendingRecompute = false;
 
   // Track embedding loads via events since embeddingCache is a plain Map
   $effect(() => {
     const src = $zarrSource;
     if (!src) { embeddingTileCount = 0; return; }
     embeddingTileCount = src.embeddingCache.size;
-    const handler = () => { embeddingTileCount = src.embeddingCache.size; };
+    const handler = () => {
+      embeddingTileCount = src.embeddingCache.size;
+      // Re-run similarity + UMAP when new tiles are loaded while a pixel is selected
+      if (refEmbedding && selectedPixel) runCompute();
+    };
     src.on('embeddings-loaded', handler);
     return () => src.off('embeddings-loaded', handler);
   });
@@ -33,10 +38,12 @@
     runCompute();
   }
 
-  /** GPU compute — runs once per reference pixel selection. */
+  /** GPU compute — runs once per reference pixel selection.
+   *  If called while already computing, queues a re-run. */
   async function runCompute() {
     const src = $zarrSource;
-    if (!src || !refEmbedding || isComputing) return;
+    if (!src || !refEmbedding) return;
+    if (isComputing) { pendingRecompute = true; return; }
     isComputing = true;
 
     try {
@@ -48,6 +55,10 @@
       applyThreshold();
     } finally {
       isComputing = false;
+      if (pendingRecompute) {
+        pendingRecompute = false;
+        runCompute();
+      }
     }
   }
 
@@ -98,7 +109,7 @@
   </div>
 
   {#if cachedScores.length > 0 && refEmbedding && selectedPixel}
-    <UmapCloud {cachedScores} {refEmbedding} {selectedPixel} />
+    <UmapCloud {cachedScores} {refEmbedding} {selectedPixel} {threshold} {embeddingTileCount} />
   {/if}
 
   {#if selectedPixel}

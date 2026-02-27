@@ -120,6 +120,7 @@ export class PointCloudRenderer {
   private dragBaseY = 0;
   private dragBaseX = 0;
   private autoSpin = true;
+  private disposed = false;
 
   constructor(private canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', { antialias: true, alpha: false })!;
@@ -149,6 +150,8 @@ export class PointCloudRenderer {
     gl.bindVertexArray(null);
 
     gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.clearColor(0.07, 0.07, 0.10, 1.0);
 
     // Mouse interaction
@@ -195,12 +198,20 @@ export class PointCloudRenderer {
     gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
   }
 
+  updateColors(colors: Uint8Array) {
+    const { gl } = this;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.colBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, colors);
+  }
+
   start() {
+    cancelAnimationFrame(this.animId);
     this.lastTime = performance.now();
     this.angleY = 0;
     this.angleX = -0.3;
     this.autoSpin = true;
     const loop = (now: number) => {
+      if (this.disposed) return;
       if (this.autoSpin) {
         const dt = (now - this.lastTime) / 1000;
         this.angleY += dt * (Math.PI / 10); // ~18°/s
@@ -245,6 +256,7 @@ export class PointCloudRenderer {
   }
 
   dispose() {
+    this.disposed = true;
     cancelAnimationFrame(this.animId);
     this.canvas.removeEventListener('mousedown', this.onMouseDown);
     this.canvas.removeEventListener('mousemove', this.onMouseMove);
