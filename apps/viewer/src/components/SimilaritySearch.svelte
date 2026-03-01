@@ -21,6 +21,11 @@
     return () => src.off('embeddings-loaded', handler);
   });
 
+  /** Re-render similarity overlays from existing scores (e.g. when switching back to this tab). */
+  export function restoreOverlays() {
+    if (get(simScores).length > 0) applyThreshold();
+  }
+
   /** Called from App.svelte when the user clicks in similarity mode. */
   export function handleClick(lng: number, lat: number) {
     const src = $zarrSource;

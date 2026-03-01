@@ -2,6 +2,7 @@
   import { Search, Tags, Scan } from 'lucide-svelte';
   import { activeTool, type ToolId } from '../stores/tools';
   import { zarrSource, metadata } from '../stores/zarr';
+  import { segmentVisible } from '../stores/segmentation';
   import SimilaritySearch from './SimilaritySearch.svelte';
   import LabelPanel from './LabelPanel.svelte';
   import SegmentPanel from './SegmentPanel.svelte';
@@ -18,8 +19,27 @@
 
   function switchTool(id: ToolId) {
     if (id === $activeTool) return;
+    const prev = $activeTool;
+
+    // Hide segment polygons when leaving the segmenter tab
+    if (prev === 'segmenter') {
+      $segmentVisible = false;
+    }
+
+    // Clear classification overlays when leaving similarity/classifier
     $zarrSource?.clearClassificationOverlays();
+
     $activeTool = id;
+
+    // Show segment polygons when entering the segmenter tab
+    if (id === 'segmenter') {
+      $segmentVisible = true;
+    }
+
+    // Restore similarity overlays when returning to similarity tab
+    if (id === 'similarity') {
+      similarityRef?.restoreOverlays();
+    }
   }
 </script>
 
