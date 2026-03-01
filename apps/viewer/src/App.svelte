@@ -47,6 +47,27 @@
   }
   let catalogModalOpen = $state(true);
   let osmModalOpen = $state(false);
+  let osmAutoImport = $state(false);
+  let sidebarOpen = $state(false);
+
+  const BASEMAP_TILES: Record<string, { tiles: string[]; attribution: string }> = {
+    osm: { tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], attribution: '&copy; OpenStreetMap' },
+    satellite: { tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], attribution: 'Esri, Maxar' },
+    dark: { tiles: ['https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'], attribution: 'CartoDB, OSM' },
+  };
+
+  function switchBasemap(id: 'osm' | 'satellite' | 'dark') {
+    const map = $mapInstance;
+    if (!map) return;
+    const bm = BASEMAP_TILES[id];
+    if (!bm) return;
+    if (map.getLayer('basemap')) map.removeLayer('basemap');
+    if (map.getSource('basemap')) map.removeSource('basemap');
+    map.addSource('basemap', { type: 'raster', tiles: [...bm.tiles], tileSize: 256, attribution: bm.attribution });
+    const layers = map.getStyle().layers;
+    const bottomLayerId = layers.length > 0 ? layers[0].id : undefined;
+    map.addLayer({ id: 'basemap', type: 'raster', source: 'basemap' }, bottomLayerId);
+  }
 
   onMount(() => {
     registerAllTutorials();
@@ -417,12 +438,25 @@
 <CatalogModal bind:open={catalogModalOpen} />
 
 <!-- OSM import modal -->
-<OsmImport bind:open={osmModalOpen} />
+<OsmImport bind:open={osmModalOpen} autoImport={osmAutoImport} />
 
-<!-- Sidebar -->
-<div class="absolute top-12 right-4 w-[240px] max-h-[calc(100vh-4rem)] bg-black/85 backdrop-blur-xl
-            border border-gray-800/80 rounded-lg shadow-2xl shadow-cyan-900/20
-            overflow-y-auto select-none z-10 font-mono text-gray-300 text-xs">
+<!-- Sidebar (bottom sheet on mobile, side panel on desktop) -->
+<div class="fixed bottom-0 left-0 right-0 w-full max-h-[60vh]
+            sm:absolute sm:top-12 sm:right-4 sm:left-auto sm:bottom-auto sm:w-[240px] sm:max-h-[calc(100vh-4rem)]
+            bg-black/85 backdrop-blur-xl
+            border border-gray-800/80 rounded-t-lg sm:rounded-lg shadow-2xl shadow-cyan-900/20
+            overflow-y-auto select-none z-10 font-mono text-gray-300 text-xs
+            transition-transform duration-300
+            pb-[env(safe-area-inset-bottom)]
+            {sidebarOpen ? 'translate-y-0' : 'translate-y-[calc(100%-2.5rem)]'}
+            sm:translate-y-0">
+  <!-- Mobile drag handle -->
+  <button
+    class="sm:hidden flex items-center justify-center w-full py-1.5 text-gray-500"
+    onclick={() => { sidebarOpen = !sidebarOpen; }}
+  >
+    <span class="text-[10px] tracking-wider uppercase">{sidebarOpen ? '▼ Tools' : '▲ Tools'}</span>
+  </button>
   <LayerSwitcher />
   <ControlPanel />
   <ToolSwitcher bind:similarityRef={similarityRef} onOpenOsm={() => { osmModalOpen = true; }} />
@@ -432,13 +466,13 @@
 <UmapCloud visible={$activeTool === 'similarity' && $simEmbeddingTileCount > 0} />
 
 <!-- Tutorial overlay -->
-<TutorialOverlay {similarityRef} />
+<TutorialOverlay {similarityRef} onOpenOsm={(opts) => { osmAutoImport = opts?.autoImport ?? false; osmModalOpen = true; }} onCloseOsm={() => { osmModalOpen = false; osmAutoImport = false; }} onSwitchBasemap={switchBasemap} />
 
 <!-- Debug console -->
 <DebugConsole />
 
-<!-- Coordinates -->
-<div class="absolute bottom-2 right-4 bg-black/70 backdrop-blur-sm
+<!-- Coordinates (desktop only — no mousemove on mobile) -->
+<div class="hidden sm:block absolute bottom-2 right-4 bg-black/70 backdrop-blur-sm
             text-[10px] text-gray-500 font-mono px-2.5 py-1 rounded
             border border-gray-800/40 z-10 tabular-nums">
   <span id="coord-text">--</span>

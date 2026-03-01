@@ -52,6 +52,7 @@
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   let searchInputEl = $state<HTMLInputElement>(undefined!);
   let locating = $state(false);
+  let searchExpanded = $state(false);
 
   function debounceSearch(q: string) {
     clearTimeout(debounceTimer);
@@ -141,7 +142,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="absolute top-0 left-0 right-0 h-9 z-20
             bg-black/85 backdrop-blur-xl border-b border-gray-800/60
-            flex items-center px-4 gap-3 font-mono text-xs select-none">
+            flex items-center px-2 sm:px-4 gap-1.5 sm:gap-3 font-mono text-xs select-none">
 
   <!-- TZE branding -->
   <div class="flex items-center gap-2 shrink-0">
@@ -149,9 +150,23 @@
     <span class="text-term-cyan text-[11px] font-bold tracking-[0.2em] uppercase">TZE</span>
   </div>
 
+  <!-- Tutorial dropdown (left, beside branding) -->
+  <TutorialDropdown />
+
   <!-- Search bar -->
   <div class="relative flex items-center gap-1" data-tutorial="search-bar">
-    <div class="relative flex items-center">
+    <!-- Mobile: icon-only search toggle -->
+    <button
+      class="sm:hidden flex items-center justify-center w-6 h-6 rounded
+             border border-gray-700/60 bg-gray-900/80
+             text-gray-500 hover:text-term-cyan hover:border-term-cyan/50
+             transition-colors"
+      onclick={() => { searchExpanded = !searchExpanded; if (searchExpanded) setTimeout(() => searchInputEl?.focus(), 50); }}
+      title="Search"
+    >
+      <Search size={12} />
+    </button>
+    <div class="relative {searchExpanded ? 'flex' : 'hidden'} sm:flex items-center">
       <Search size={11} class="absolute left-1.5 text-gray-600 pointer-events-none" />
       <input
         bind:this={searchInputEl}
@@ -159,9 +174,10 @@
         oninput={() => debounceSearch(searchQuery)}
         onkeydown={handleSearchKeydown}
         onfocus={() => { if (searchResults.length > 0) searchOpen = true; }}
+        onblur={() => { if (!searchQuery) searchExpanded = false; }}
         type="text"
         placeholder="Search location..."
-        class="w-[220px] h-6 pl-6 pr-2 rounded bg-gray-900/80 border border-term-cyan/30
+        class="w-[160px] sm:w-[220px] h-6 pl-6 pr-2 rounded bg-gray-900/80 border border-term-cyan/30
                text-[11px] text-gray-300 placeholder-gray-600
                focus:border-term-cyan/50 focus:outline-none focus:ring-0
                focus:shadow-[0_0_8px_rgba(0,229,255,0.15)]
@@ -209,9 +225,6 @@
   <!-- Spacer -->
   <div class="flex-1"></div>
 
-  <!-- Tutorial dropdown -->
-  <TutorialDropdown />
-
   <!-- Unified zone / status button -->
   <div class="relative">
     <button
@@ -232,8 +245,8 @@
         {/if}
       </span>
       {#if $metadata}
-        <span class="text-[10px] text-gray-600">EPSG:{$metadata.epsg}</span>
-        <span class="text-[10px] text-gray-600">{$metadata.nBands}b</span>
+        <span class="hidden sm:inline text-[10px] text-gray-600">EPSG:{$metadata.epsg}</span>
+        <span class="hidden sm:inline text-[10px] text-gray-600">{$metadata.nBands}b</span>
         {#if $loading.total > 0}
           <span class="text-[10px] text-term-cyan/60 tabular-nums">{$loading.done}/{$loading.total}</span>
         {/if}

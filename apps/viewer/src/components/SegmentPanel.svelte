@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ChevronDown, Sun } from 'lucide-svelte';
   import { zarrSource } from '../stores/zarr';
   import { segmentPolygons } from '../stores/segmentation';
   import {
@@ -8,6 +9,13 @@
     hasCachedProbabilities,
   } from '../lib/segment';
 
+  const DETECTORS = [
+    { id: 'solar', label: 'Solar Panels', icon: Sun },
+  ] as const;
+
+  let selectedDetector = $state<string>('solar');
+  let detectorDropdownOpen = $state(false);
+
   let threshold = $state(0.5);
   let isRunning = $state(false);
   let progressDone = $state(0);
@@ -16,6 +24,8 @@
   let embeddingTileCount = $state(0);
   let hasProbs = $state(false);
   let errorMsg = $state<string | null>(null);
+
+  const activeDetector = $derived(DETECTORS.find(d => d.id === selectedDetector) ?? DETECTORS[0]);
 
   $effect(() => {
     const src = $zarrSource;
@@ -73,10 +83,44 @@
   }
 </script>
 
-<div class="space-y-3">
+<div class="space-y-3" data-tutorial="segment-panel">
+  <!-- Detector selector -->
+  <div class="relative">
+    <button
+      onclick={() => { detectorDropdownOpen = !detectorDropdownOpen; }}
+      class="flex items-center gap-1.5 w-full px-2 py-1.5 rounded
+             border border-gray-700/60 bg-gray-900/60
+             text-[10px] text-gray-300 hover:border-gray-600 transition-colors"
+    >
+      <activeDetector.icon size={11} class="text-orange-400 shrink-0" />
+      <span class="flex-1 text-left">{activeDetector.label}</span>
+      <ChevronDown size={10} class="text-gray-600" />
+    </button>
+    {#if detectorDropdownOpen}
+      <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
+      <div class="fixed inset-0 z-30" onclick={() => { detectorDropdownOpen = false; }}></div>
+      <div class="absolute top-full left-0 right-0 mt-1 z-40
+                  bg-gray-950 border border-gray-700/80 rounded shadow-xl py-1">
+        {#each DETECTORS as det}
+          <button
+            onclick={() => { selectedDetector = det.id; detectorDropdownOpen = false; }}
+            class="flex items-center gap-2 w-full text-left px-3 py-1.5
+                   text-[10px] transition-colors
+                   {det.id === selectedDetector
+                     ? 'text-orange-400 bg-orange-400/10'
+                     : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'}"
+          >
+            <det.icon size={11} />
+            {det.label}
+          </button>
+        {/each}
+      </div>
+    {/if}
+  </div>
+
   {#if embeddingTileCount === 0}
     <div class="text-[9px] text-gray-700 leading-relaxed">
-      Double-click tiles to load embeddings, then detect solar panels with a trained UNet model.
+      Double-click tiles to load embeddings, then run detection with a trained UNet model.
     </div>
   {:else}
     <div class="text-[10px] text-gray-500">
@@ -85,6 +129,7 @@
   {/if}
 
   <button
+    data-tutorial="segment-detect-btn"
     onclick={handleDetect}
     disabled={embeddingTileCount === 0 || isRunning}
     class="w-full text-[10px] font-bold tracking-wider px-2 py-2 rounded
@@ -93,7 +138,7 @@
              ? 'text-orange-400 border-orange-500/40 hover:border-orange-400/60 hover:bg-orange-400/10'
              : 'text-gray-600 border-gray-700/60 opacity-40 pointer-events-none'}"
   >
-    {isRunning ? 'DETECTING...' : 'DETECT SOLAR PANELS'}
+    {isRunning ? 'DETECTING...' : `DETECT ${activeDetector.label.toUpperCase()}`}
   </button>
 
   {#if isRunning && progressTotal > 0}

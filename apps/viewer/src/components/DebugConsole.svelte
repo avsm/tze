@@ -87,13 +87,13 @@
     onclick={() => { visible = true; }}
     class="absolute bottom-2 left-2 z-10 bg-black/70 backdrop-blur-sm
            text-gray-600 hover:text-gray-400 text-[10px] font-mono
-           w-7 h-7 flex items-center justify-center rounded
+           w-7 h-7 hidden sm:flex items-center justify-center rounded
            border border-gray-800/60 hover:border-gray-700 transition-colors
            cursor-pointer select-none"
     title="Show debug console"
   >&gt;_</button>
 {:else}
-  <div class="absolute bottom-2 left-2 z-10 font-mono select-none"
+  <div class="hidden sm:block absolute bottom-2 left-2 z-10 font-mono select-none"
        style="right: 260px; max-width: calc(100vw - 280px);">
     <!-- Toggle bar -->
     <button

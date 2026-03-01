@@ -87,7 +87,7 @@
   }
 </script>
 
-<div class="space-y-3">
+<div class="space-y-3" data-tutorial="label-panel">
 
   {#if $classes.length > 0}
     <div class="space-y-1">
@@ -148,6 +148,7 @@
 
   <button
     onclick={() => onOpenOsm?.()}
+    data-tutorial="label-panel-osm"
     class="w-full text-[10px] font-bold py-1.5 rounded border transition-all
            bg-gray-900 text-gray-400 border-gray-700/60 hover:border-term-cyan/50 hover:text-term-cyan"
   >IMPORT FROM OSM</button>

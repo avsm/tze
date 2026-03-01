@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Search, Tags, Sun } from 'lucide-svelte';
+  import { Search, Tags, Scan } from 'lucide-svelte';
   import { activeTool, type ToolId } from '../stores/tools';
   import { zarrSource, metadata } from '../stores/zarr';
   import SimilaritySearch from './SimilaritySearch.svelte';
@@ -11,7 +11,7 @@
   const tools: { id: ToolId; label: string; icon: typeof Search }[] = [
     { id: 'similarity', label: 'Similar', icon: Search },
     { id: 'classifier', label: 'Classify', icon: Tags },
-    { id: 'segmenter',  label: 'Solar',   icon: Sun },
+    { id: 'segmenter',  label: 'Segment', icon: Scan },
   ];
 
   let { similarityRef = $bindable(), onOpenOsm }: { similarityRef?: SimilaritySearch; onOpenOsm?: () => void } = $props();

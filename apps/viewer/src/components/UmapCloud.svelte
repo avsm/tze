@@ -27,12 +27,20 @@
   let winY = $state(-1);
   let dragState: { mode: 'move' | 'resize'; startX: number; startY: number; origX: number; origY: number; origW: number; origH: number } | null = null;
 
-  /** Position flush-right with the sidebar on first show. */
+  /** Position flush-right with the sidebar on first show; smaller on mobile. */
   function ensurePositioned() {
     if (winX >= 0) return;
-    // Sidebar: right-4 (16px), w-[240px] → right edge at innerWidth - 16
-    winX = window.innerWidth - 16 - winW;
-    winY = window.innerHeight - winH - 48;
+    if (window.innerWidth < 640) {
+      // Mobile: compact, centered horizontally, above bottom sheet
+      winW = Math.min(240, window.innerWidth - 32);
+      winH = 260;
+      winX = Math.round((window.innerWidth - winW) / 2);
+      winY = window.innerHeight - winH - 60;
+    } else {
+      // Desktop: sidebar-aligned
+      winX = window.innerWidth - 16 - winW;
+      winY = window.innerHeight - winH - 48;
+    }
     if (winX < 8) winX = 8;
     if (winY < 60) winY = 60;
   }

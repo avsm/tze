@@ -32,9 +32,11 @@ export class ZarrTesseraSource {
   private dblclickHandler: ((e: { preventDefault(): void; lngLat: { lng: number; lat: number } }) => void) | null = null;
   /** Long-press handler for mobile (alternative to double-click). */
   private longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  private touchStartX = 0;
+  private touchStartY = 0;
   private touchStartHandler: ((e: TouchEvent) => void) | null = null;
   private touchEndHandler: (() => void) | null = null;
-  private touchMoveHandler: (() => void) | null = null;
+  private touchMoveHandler: ((e: TouchEvent) => void) | null = null;
   private listeners = new Map<string, Set<EventCallback<unknown>>>();
   /** Tracks active loading animations per chunk key → animation frame ID. */
   private loadingAnimations = new Map<string, number>();
@@ -103,20 +105,32 @@ export class ZarrTesseraSource {
       const canvas = map.getCanvasContainer();
       this.touchStartHandler = (e: TouchEvent) => {
         if (e.touches.length !== 1) return;
+        const touch = e.touches[0];
+        this.touchStartX = touch.clientX;
+        this.touchStartY = touch.clientY;
+        const startX = touch.clientX;
+        const startY = touch.clientY;
         this.longPressTimer = setTimeout(() => {
           this.longPressTimer = null;
-          const touch = e.touches[0];
-          if (!touch) return;
-          // Convert touch point to lng/lat via MapLibre
-          const lngLat = map.unproject([touch.clientX, touch.clientY]);
+          // Use saved coordinates — e.touches[0] may be stale inside setTimeout
+          const lngLat = map.unproject([startX, startY]);
           this.triggerEmbeddingLoad(lngLat.lng, lngLat.lat);
         }, 500);
       };
       this.touchEndHandler = () => {
         if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = null; }
       };
-      this.touchMoveHandler = () => {
-        if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = null; }
+      this.touchMoveHandler = (e: TouchEvent) => {
+        if (!this.longPressTimer) return;
+        const touch = e.touches[0];
+        if (!touch) return;
+        const dx = touch.clientX - this.touchStartX;
+        const dy = touch.clientY - this.touchStartY;
+        // Only cancel if moved > 10px (tolerates finger jitter)
+        if (dx * dx + dy * dy > 100) {
+          clearTimeout(this.longPressTimer);
+          this.longPressTimer = null;
+        }
       };
       canvas.addEventListener('touchstart', this.touchStartHandler, { passive: true });
       canvas.addEventListener('touchend', this.touchEndHandler);

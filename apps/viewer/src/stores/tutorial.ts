@@ -2,6 +2,7 @@ import { writable, derived, get } from 'svelte/store';
 import type { TutorialDef, TutorialStep } from '../lib/tutorial';
 import { simScores, simRefEmbedding, simSelectedPixel, simThreshold } from './similarity';
 import { zarrSource } from './zarr';
+import { classes, labels, isClassified, activeClassName } from './classifier';
 
 export const tutorialRegistry = writable<TutorialDef[]>([]);
 export const activeTutorial = writable<TutorialDef | null>(null);
@@ -33,13 +34,17 @@ export function startTutorial(id: string) {
   const def = list.find((t) => t.id === id);
   if (!def) return;
 
-  // Reset similarity state so the tutorial starts clean
+  // Reset similarity + classifier state so the tutorial starts clean
   const src = get(zarrSource);
   if (src) src.clearClassificationOverlays();
   simSelectedPixel.set(null);
   simRefEmbedding.set(null);
   simScores.set([]);
   simThreshold.set(0.5);
+  classes.set([]);
+  labels.set([]);
+  isClassified.set(false);
+  activeClassName.set(null);
 
   currentStepIndex.set(0);
   stepActionRunning.set(false);

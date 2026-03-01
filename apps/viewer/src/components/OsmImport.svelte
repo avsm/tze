@@ -6,9 +6,10 @@
 
   interface Props {
     open: boolean;
+    autoImport?: boolean;
   }
 
-  let { open = $bindable(false) }: Props = $props();
+  let { open = $bindable(false), autoImport = false }: Props = $props();
 
   type Phase = 'idle' | 'querying' | 'selecting' | 'sampling' | 'done' | 'error';
 
@@ -37,6 +38,13 @@
   $effect(() => {
     if (open && canQuery && phase === 'idle' && categories.length === 0) {
       handleQuery();
+    }
+  });
+
+  // Auto-import all categories when in tutorial mode
+  $effect(() => {
+    if (autoImport && phase === 'selecting' && selected.size > 0) {
+      handleImport();
     }
   });
 

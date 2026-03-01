@@ -15,19 +15,33 @@
   import { zarrSource, metadata } from '../stores/zarr';
   import { activeTool } from '../stores/tools';
   import { simThreshold, simScores, simRefEmbedding, simSelectedPixel, simEmbeddingTileCount } from '../stores/similarity';
+  import { classes, labels, isClassified, classificationOpacity, kValue, confidenceThreshold } from '../stores/classifier';
   import type { TutorialContext, ArrowDirection } from '../lib/tutorial';
   import type SimilaritySearch from './SimilaritySearch.svelte';
 
   interface Props {
     similarityRef?: SimilaritySearch;
+    onOpenOsm?: (opts?: { autoImport?: boolean }) => void;
+    onCloseOsm?: () => void;
+    onSwitchBasemap?: (id: 'osm' | 'satellite' | 'dark') => void;
   }
-  let { similarityRef }: Props = $props();
+  let { similarityRef, onOpenOsm, onCloseOsm, onSwitchBasemap }: Props = $props();
 
   // Card position — default top-left, user-draggable
   let cardEl: HTMLDivElement | undefined = $state();
   let cardX = $state(16);
   let cardY = $state(48); // below TopBar
   let userDragged = $state(false);
+
+  // Diagram panel position
+  let diagramX = $state(-1); // -1 = auto-position
+  let diagramY = $state(48);
+  let diagramDragState: { startX: number; startY: number; origX: number; origY: number } | null = null;
+
+  function startDiagramDrag(e: MouseEvent) {
+    e.preventDefault();
+    diagramDragState = { startX: e.clientX, startY: e.clientY, origX: diagramX, origY: diagramY };
+  }
 
   // Highlight state
   let highlightRect = $state<DOMRect | null>(null);
@@ -44,17 +58,23 @@
     dragState = { startX: e.clientX, startY: e.clientY, origX: cardX, origY: cardY };
   }
 
-  // Global drag listeners
+  // Global drag listeners (card + diagram panel)
   $effect(() => {
     if (!$activeTutorial) return;
     const onMove = (e: MouseEvent) => {
-      if (!dragState) return;
-      e.preventDefault();
-      cardX = dragState.origX + (e.clientX - dragState.startX);
-      cardY = dragState.origY + (e.clientY - dragState.startY);
-      userDragged = true;
+      if (dragState) {
+        e.preventDefault();
+        cardX = dragState.origX + (e.clientX - dragState.startX);
+        cardY = dragState.origY + (e.clientY - dragState.startY);
+        userDragged = true;
+      }
+      if (diagramDragState) {
+        e.preventDefault();
+        diagramX = diagramDragState.origX + (e.clientX - diagramDragState.startX);
+        diagramY = diagramDragState.origY + (e.clientY - diagramDragState.startY);
+      }
     };
-    const onUp = () => { dragState = null; };
+    const onUp = () => { dragState = null; diagramDragState = null; };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     return () => {
@@ -80,6 +100,12 @@
         simRefEmbedding,
         simSelectedPixel,
         simEmbeddingTileCount,
+        classes,
+        labels,
+        isClassified,
+        classificationOpacity,
+        kValue,
+        confidenceThreshold,
       },
       flyTo(opts) {
         return new Promise<void>((resolve) => {
@@ -108,6 +134,15 @@
       },
       similarityClick(lng: number, lat: number) {
         similarityRef?.handleClick(lng, lat);
+      },
+      openOsmModal(opts) {
+        onOpenOsm?.(opts);
+      },
+      closeOsmModal() {
+        onCloseOsm?.();
+      },
+      switchBasemap(id: 'osm' | 'satellite' | 'dark') {
+        onSwitchBasemap?.(id);
       },
     };
   }
@@ -221,7 +256,16 @@
       highlightRect = null;
       lastActionStepId = '';
       userDragged = false;
+      diagramX = -1;
       return;
+    }
+
+    // Auto-position diagram panel when step has one — bottom-left, flush
+    if (step.diagram && diagramX < 0) {
+      diagramX = 0;
+      diagramY = window.innerHeight; // will be clamped by CSS bottom:0
+    } else if (!step.diagram) {
+      diagramX = -1;
     }
 
     // Reset auto-position on step change (unless user has dragged)
@@ -358,7 +402,8 @@
   <!-- Card (draggable) -->
   <div
     bind:this={cardEl}
-    class="fixed z-[57] bg-gray-950 border border-term-cyan/40 rounded-lg w-[320px]
+    class="fixed z-[57] bg-gray-950 border border-term-cyan/40 rounded-lg
+           w-[calc(100vw-2rem)] sm:w-[320px] max-w-[320px]
            shadow-lg shadow-cyan-900/20 font-mono select-none"
     style:left="{cardX}px"
     style:top="{cardY}px"
@@ -381,7 +426,7 @@
     </div>
 
     <!-- Body -->
-    <div class="px-3 py-3 text-[11px] text-gray-400 leading-relaxed min-h-[48px]">
+    <div class="px-3 py-2 sm:py-3 text-[11px] text-gray-400 leading-relaxed min-h-[40px] sm:min-h-[48px]">
       {#if $stepActionRunning}
         <div class="flex items-center gap-2 text-term-cyan/80">
           <div class="w-3 h-3 border border-term-cyan/40 border-t-term-cyan rounded-full animate-spin"></div>
@@ -391,6 +436,11 @@
         {#each $currentStep.description.split('\n') as line}
           <p class:mt-2={line === ''}>{line}</p>
         {/each}
+        {#if $currentStep.html}
+          <div class="mt-2">
+            {@html $currentStep.html}
+          </div>
+        {/if}
       {/if}
     </div>
 
@@ -415,6 +465,33 @@
       </div>
     </div>
   </div>
+
+  <!-- Diagram panel (separate floating window — bottom-left) -->
+  {#if $currentStep.diagram}
+    <div
+      class="fixed z-[57] left-0 bottom-0
+             bg-gray-950/95 backdrop-blur-sm border-t border-r border-term-cyan/30
+             rounded-tr-lg
+             w-full sm:w-[520px] max-w-[520px]
+             shadow-lg shadow-cyan-900/20 font-mono select-none"
+    >
+      <div
+        class="flex items-center gap-2 px-3 py-1.5 border-b border-gray-800/60"
+      >
+        <div class="w-2 h-2 rounded-full bg-term-cyan/60 shrink-0"></div>
+        {#if $currentStep.diagram.url}
+          <a href={$currentStep.diagram.url} target="_blank" rel="noopener"
+             class="text-[11px] text-term-cyan/80 hover:text-term-cyan flex-1 underline underline-offset-2 decoration-term-cyan/40 hover:decoration-term-cyan/80 transition-colors"
+          >{$currentStep.diagram.title}</a>
+        {:else}
+          <span class="text-[11px] text-gray-400 flex-1">{$currentStep.diagram.title}</span>
+        {/if}
+      </div>
+      <div class="px-4 py-3">
+        {@html $currentStep.diagram.html}
+      </div>
+    </div>
+  {/if}
 {/if}
 
 <style>
