@@ -403,30 +403,45 @@ export class ZarrTesseraSource {
     return result;
   }
 
-  /** Load a batch of embedding chunks, calling onProgress after each.
+  /** Load a batch of embedding chunks with parallel concurrency,
+   *  calling onProgress after each completes.
    *  Returns the number of chunks successfully loaded. */
   async loadChunkBatch(
     chunks: { ci: number; cj: number }[],
     onProgress?: (loaded: number, total: number) => void,
   ): Promise<number> {
     let loaded = 0;
+    let succeeded = 0;
     const total = chunks.length;
-    for (const { ci, cj } of chunks) {
-      const key = this.chunkKey(ci, cj);
-      if (this.embeddingCache.has(key)) {
+    const concurrency = this.opts.concurrency ?? 4;
+
+    // Process chunks in parallel with concurrency limit
+    let cursor = 0;
+    const next = async (): Promise<void> => {
+      while (cursor < total) {
+        const idx = cursor++;
+        const { ci, cj } = chunks[idx];
+        const key = this.chunkKey(ci, cj);
+        if (this.embeddingCache.has(key)) {
+          succeeded++;
+          loaded++;
+          onProgress?.(loaded, total);
+          continue;
+        }
+        try {
+          await this.loadFullChunk(ci, cj);
+          succeeded++;
+        } catch (err) {
+          this.debug('error', `Failed to load chunk (${ci},${cj}): ${(err as Error).message}`);
+        }
         loaded++;
         onProgress?.(loaded, total);
-        continue;
       }
-      try {
-        await this.loadFullChunk(ci, cj);
-        loaded++;
-      } catch (err) {
-        this.debug('error', `Failed to load chunk (${ci},${cj}): ${(err as Error).message}`);
-      }
-      onProgress?.(loaded, total);
-    }
-    return loaded;
+    };
+
+    const workers = Array.from({ length: Math.min(concurrency, total) }, () => next());
+    await Promise.all(workers);
+    return succeeded;
   }
 
   /** Extract the 128-d embedding vector at a map coordinate.

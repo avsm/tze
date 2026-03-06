@@ -2,6 +2,7 @@
   import { get } from 'svelte/store';
   import { zarrSource } from '../stores/zarr';
   import { simScores, simRefEmbedding, simSelectedPixel, simThreshold, simEmbeddingTileCount } from '../stores/similarity';
+  import { roiLoading } from '../stores/drawing';
   import { computeSimilarityScores, renderSimilarityOverlays, type TileSimilarity } from '../lib/similarity';
 
   let isComputing = $state(false);
@@ -14,11 +15,21 @@
     $simEmbeddingTileCount = src.embeddingCache.size;
     const handler = () => {
       $simEmbeddingTileCount = src.embeddingCache.size;
-      // Re-run similarity + UMAP when new tiles are loaded while a pixel is selected
-      if ($simRefEmbedding && $simSelectedPixel) runCompute();
     };
     src.on('embeddings-loaded', handler);
     return () => src.off('embeddings-loaded', handler);
+  });
+
+  // Recompute similarity when ROI loading finishes (transitions from loading to idle)
+  let wasLoading = false;
+  $effect(() => {
+    const loading = $roiLoading;
+    if (loading) {
+      wasLoading = true;
+    } else if (wasLoading) {
+      wasLoading = false;
+      if ($simRefEmbedding && $simSelectedPixel) runCompute();
+    }
   });
 
   /** Re-render similarity overlays from existing scores (e.g. when switching back to this tab). */

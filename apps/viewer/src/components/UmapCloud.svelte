@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { zarrSource } from '../stores/zarr';
   import { simScores, simRefEmbedding, simSelectedPixel, simThreshold, simEmbeddingTileCount } from '../stores/similarity';
+  import { roiLoading } from '../stores/drawing';
   import { subsampleEmbeddings, subsampleUniform } from '../lib/umap-subsample';
   import { PointCloudRenderer } from '../lib/point-cloud-renderer';
   import type { UmapWorkerInput, UmapWorkerOutput } from '../lib/umap-worker';
@@ -135,13 +136,14 @@
     };
   }
 
-  // Trigger UMAP when data changes
+  // Trigger UMAP when data changes — skip during ROI batch loading
   $effect(() => {
     const _s = $simScores;
     const _r = $simRefEmbedding;
     const _p = $simSelectedPixel;
     const _t = $simEmbeddingTileCount;
-    if (_t > 0) runUmap();
+    const loading = $roiLoading;
+    if (_t > 0 && !loading) runUmap();
   });
 
   // Recolor on threshold change
