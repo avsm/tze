@@ -46,7 +46,7 @@ export interface TutorialContext {
     metadata: Readable<StoreMetadata | null>;
     simScores: Writable<SimilarityResult | null>;
     simRefEmbedding: Writable<Float32Array | null>;
-    simSelectedPixel: Writable<{ ci: number; cj: number; row: number; col: number } | null>;
+    simSelectedPixel: Writable<{ ci: number; cj: number; row: number; col: number; lng: number; lat: number } | null>;
     simEmbeddingTileCount: Writable<number>;
     classes: Writable<ClassDef[]>;
     labels: Writable<LabelPoint[]>;

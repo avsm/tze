@@ -19,7 +19,7 @@
   import { segmentPolygons, segmentVisible } from './stores/segmentation';
   import UmapCloud from './components/UmapCloud.svelte';
   import TutorialOverlay from './components/TutorialOverlay.svelte';
-  import { simEmbeddingTileCount } from './stores/similarity';
+  import { simEmbeddingTileCount, simSelectedPixel } from './stores/similarity';
   import { registerAllTutorials } from './lib/tutorials/index';
   import { TerraDraw, TerraDrawPolygonMode, TerraDrawRectangleMode } from 'terra-draw';
   import { TerraDrawMapLibreGLAdapter } from 'terra-draw-maplibre-gl-adapter';
@@ -173,6 +173,36 @@
         type: 'line',
         source: 'roi-regions',
         paint: { 'line-color': '#00e5ff', 'line-width': 2, 'line-opacity': 0.9, 'line-dasharray': [4, 2] },
+      });
+
+      // Similarity reference pixel marker
+      map.addSource('sim-ref-marker', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+      // Outer ring
+      map.addLayer({
+        id: 'sim-ref-marker-ring',
+        type: 'circle',
+        source: 'sim-ref-marker',
+        paint: {
+          'circle-radius': 10,
+          'circle-color': 'transparent',
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 2.5,
+        },
+      });
+      // Inner dot
+      map.addLayer({
+        id: 'sim-ref-marker-dot',
+        type: 'circle',
+        source: 'sim-ref-marker',
+        paint: {
+          'circle-radius': 3.5,
+          'circle-color': '#00e5ff',
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 1,
+        },
       });
 
       // Terra-draw for polygon/rectangle drawing
@@ -388,6 +418,23 @@
       canvas.style.cursor = 'crosshair';
     } else {
       canvas.style.cursor = '';
+    }
+  });
+
+  // Update similarity reference pixel marker
+  $effect(() => {
+    const map = $mapInstance;
+    const pixel = $simSelectedPixel;
+    if (!map) return;
+    const src = map.getSource('sim-ref-marker') as maplibregl.GeoJSONSource | undefined;
+    if (!src) return;
+    if (pixel) {
+      src.setData({
+        type: 'FeatureCollection',
+        features: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [pixel.lng, pixel.lat] }, properties: {} }],
+      });
+    } else {
+      src.setData({ type: 'FeatureCollection', features: [] });
     }
   });
 

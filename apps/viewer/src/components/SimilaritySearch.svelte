@@ -45,7 +45,7 @@
     const emb = src.getEmbeddingAt(lng, lat);
     if (!emb) return;
 
-    $simSelectedPixel = { ci: emb.ci, cj: emb.cj, row: emb.row, col: emb.col };
+    $simSelectedPixel = { ci: emb.ci, cj: emb.cj, row: emb.row, col: emb.col, lng, lat };
     $simRefEmbedding = emb.embedding;
     runCompute();
   }
