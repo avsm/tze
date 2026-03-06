@@ -50,15 +50,28 @@ export async function addRegion(feature: GeoJSON.Feature): Promise<void> {
 
   if (chunks.length === 0) return;
 
+  // Start region-wide loading animation
+  src.startRegionAnimation(geometry, chunks);
+
   // Start progressive loading
   const total = chunks.length;
   roiLoading.set({ loaded: 0, total });
 
+  let prevLoaded = 0;
   await src.loadChunkBatch(chunks, (loaded, t) => {
     roiLoading.set({ loaded, total: t });
+    // Mark newly loaded tiles on the animation
+    if (loaded > prevLoaded) {
+      // We know which tile just loaded from the chunks array
+      for (let i = prevLoaded; i < loaded && i < chunks.length; i++) {
+        src.updateRegionAnimation(loaded, t, chunks[i].ci, chunks[i].cj);
+      }
+      prevLoaded = loaded;
+    }
   });
 
-  // Re-render all tiles with a global colour scale so they match
+  // Stop animation and re-render tiles
+  src.stopRegionAnimation();
   src.recolorAllChunks();
 
   // Record which chunks this region owns

@@ -8,6 +8,7 @@ import { UtmProjection } from './projection.js';
 import { openStore, fetchRegion, type ZarrStore } from './zarr-reader.js';
 import { WorkerPool } from './worker-pool.js';
 import { ZarrLayer } from '@carbonplan/zarr-layer';
+import { RegionLoadingAnimation } from './region-loading-animation.js';
 
 type EventCallback<T> = (data: T) => void;
 
@@ -36,6 +37,8 @@ export class ZarrTesseraSource {
   private tileProgress = new Map<string, number>();
   /** Per-pixel class ID maps from classification, keyed by chunk key. */
   private classificationMaps = new Map<string, { width: number; height: number; classMap: Int16Array }>();
+  /** Region-wide loading animation (covers entire ROI polygon). */
+  private regionAnimation: RegionLoadingAnimation | null = null;
 
   constructor(options: ZarrTesseraOptions) {
     this.opts = {
@@ -123,6 +126,7 @@ export class ZarrTesseraSource {
     this.currentAbort?.abort();
     for (const [, frameId] of this.loadingAnimations) cancelAnimationFrame(frameId);
     this.loadingAnimations.clear();
+    this.stopRegionAnimation();
     for (const [key] of this.chunkCache) this.removeChunkFromMap(key);
     this.embeddingRegion = null;
     this.classificationMaps.clear();
@@ -574,6 +578,61 @@ export class ZarrTesseraSource {
     const workers = Array.from({ length: Math.min(concurrency, total) }, () => next());
     await Promise.all(workers);
     return succeeded;
+  }
+
+  /** Start region-wide loading animation covering the given polygon. */
+  startRegionAnimation(
+    polygon: GeoJSON.Polygon,
+    chunks: { ci: number; cj: number }[],
+  ): void {
+    if (!this.map || chunks.length === 0) return;
+    this.stopRegionAnimation();
+
+    // Compute bounds
+    let ciMin = Infinity, ciMax = -Infinity, cjMin = Infinity, cjMax = -Infinity;
+    for (const { ci, cj } of chunks) {
+      if (ci < ciMin) ciMin = ci;
+      if (ci > ciMax) ciMax = ci;
+      if (cj < cjMin) cjMin = cj;
+      if (cj > cjMax) cjMax = cj;
+    }
+
+    // Polygon bbox in lng/lat
+    const coords = polygon.coordinates[0];
+    let west = Infinity, south = Infinity, east = -Infinity, north = -Infinity;
+    for (const [lng, lat] of coords) {
+      if (lng < west) west = lng;
+      if (lng > east) east = lng;
+      if (lat < south) south = lat;
+      if (lat > north) north = lat;
+    }
+
+    this.regionAnimation = new RegionLoadingAnimation({
+      map: this.map as any,
+      polygon: coords as [number, number][],
+      bbox: [west, south, east, north],
+      chunks,
+      ciMin, ciMax, cjMin, cjMax,
+      chunkCorners: (ci, cj) => this.chunkCorners(ci, cj),
+    });
+    this.raiseOverlayLayers();
+  }
+
+  /** Update region animation progress and mark a tile as loaded. */
+  updateRegionAnimation(loaded: number, total: number, ci?: number, cj?: number): void {
+    if (!this.regionAnimation) return;
+    this.regionAnimation.updateProgress(loaded, total);
+    if (ci != null && cj != null) {
+      this.regionAnimation.markTileLoaded(ci, cj);
+    }
+  }
+
+  /** Stop and remove the region loading animation. */
+  stopRegionAnimation(): void {
+    if (this.regionAnimation) {
+      this.regionAnimation.destroy();
+      this.regionAnimation = null;
+    }
   }
 
   /** Check if a tile is loaded in the region. */
@@ -1431,6 +1490,8 @@ export class ZarrTesseraSource {
     for (const id of previewLayers) this.map!.moveLayer(id);
     // Per-chunk embedding layers
     for (const id of chunkLayers) this.map!.moveLayer(id);
+    // Region loading animation (above preview, below overlays)
+    if (this.map!.getLayer('zarr-region-anim-lyr')) this.map!.moveLayer('zarr-region-anim-lyr');
     // RGB region canvas
     if (this.map!.getLayer('zarr-rgb-overlay-lyr')) this.map!.moveLayer('zarr-rgb-overlay-lyr');
     for (const id of loadLayers) this.map!.moveLayer(id);
