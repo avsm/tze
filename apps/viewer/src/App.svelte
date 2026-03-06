@@ -55,12 +55,10 @@
   let sidebarOpen = $state(false);
 
   const BASEMAP_TILES: Record<string, { tiles: string[]; attribution: string }> = {
-    osm: { tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], attribution: '&copy; OpenStreetMap' },
     satellite: { tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], attribution: 'Esri, Maxar' },
-    dark: { tiles: ['https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'], attribution: 'CartoDB, OSM' },
   };
 
-  function switchBasemap(id: 'osm' | 'satellite' | 'dark') {
+  function switchBasemap(id: 'osm' | 'satellite' | 'dark') { // kept for tutorial compatibility
     const map = $mapInstance;
     if (!map) return;
     const bm = BASEMAP_TILES[id];
@@ -80,15 +78,8 @@
       container: mapContainer,
       style: {
         version: 8,
-        sources: {
-          basemap: {
-            type: 'raster',
-            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-            tileSize: 256,
-            attribution: '&copy; OpenStreetMap',
-          },
-        },
-        layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
+        sources: {},
+        layers: [],
       },
       center: [-0.12, 51.51],
       zoom: 6,
