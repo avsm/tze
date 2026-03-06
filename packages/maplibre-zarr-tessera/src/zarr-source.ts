@@ -366,16 +366,31 @@ export class ZarrTesseraSource {
   /** Return all chunk indices whose bounding boxes intersect a GeoJSON polygon. */
   getChunksInRegion(polygon: GeoJSON.Polygon): { ci: number; cj: number }[] {
     if (!this.store || !this.proj) return [];
-    // Compute bounding box of the polygon in UTM
+    // Convert polygon ring to UTM coordinates
     const coords = polygon.coordinates[0]; // outer ring
+    const utmRing: [number, number][] = [];
     let minE = Infinity, maxE = -Infinity, minN = Infinity, maxN = -Infinity;
     for (const [lng, lat] of coords) {
       const [e, n] = this.proj.forward(lng, lat);
+      utmRing.push([e, n]);
       if (e < minE) minE = e;
       if (e > maxE) maxE = e;
       if (n < minN) minN = n;
       if (n > maxN) maxN = n;
     }
+
+    // Ray-casting point-in-polygon test (UTM coords)
+    const pointInPoly = (px: number, py: number): boolean => {
+      let inside = false;
+      for (let i = 0, j = utmRing.length - 1; i < utmRing.length; j = i++) {
+        const [xi, yi] = utmRing[i], [xj, yj] = utmRing[j];
+        if ((yi > py) !== (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+          inside = !inside;
+        }
+      }
+      return inside;
+    };
+
     // Convert UTM bounds to chunk index ranges (same math as visibleChunkIndices)
     const cs = this.store.meta.chunkShape;
     const s = this.store.meta.shape;
@@ -391,13 +406,35 @@ export class ZarrTesseraSource {
     const ciMin = Math.max(0, Math.floor((originN - maxN) / (cs[0] * px)));
     const ciMax = Math.min(nChunksRow - 1, Math.floor((originN - minN) / (cs[0] * px)));
 
+    const chunkW = cs[1] * px;
+    const chunkH = cs[0] * px;
+
     const result: { ci: number; cj: number }[] = [];
     for (let ci = ciMin; ci <= ciMax; ci++) {
       for (let cj = cjMin; cj <= cjMax; cj++) {
         if (this.store.chunkManifest && !this.store.chunkManifest.has(`${ci}_${cj}`)) continue;
-        if (!this.embeddingCache.has(this.chunkKey(ci, cj))) {
-          result.push({ ci, cj });
+        if (this.embeddingCache.has(this.chunkKey(ci, cj))) continue;
+
+        // Chunk bounds in UTM
+        const cMinE = originE + cj * chunkW;
+        const cMaxE = cMinE + chunkW;
+        const cMaxN = originN - ci * chunkH;
+        const cMinN = cMaxN - chunkH;
+
+        // Test overlap: chunk center in polygon, or any polygon vertex in chunk
+        const centerE = (cMinE + cMaxE) / 2;
+        const centerN = (cMinN + cMaxN) / 2;
+        let overlaps = pointInPoly(centerE, centerN);
+        if (!overlaps) {
+          for (const [e, n] of utmRing) {
+            if (e >= cMinE && e <= cMaxE && n >= cMinN && n <= cMaxN) {
+              overlaps = true;
+              break;
+            }
+          }
         }
+
+        if (overlaps) result.push({ ci, cj });
       }
     }
     return result;
@@ -638,43 +675,7 @@ export class ZarrTesseraSource {
 
   /** Update the GeoJSON highlight border around tiles with cached embeddings. */
   private updateEmbeddingHighlights(): void {
-    if (!this.map || !this.proj) return;
-    const sourceId = 'emb-highlight';
-    const layerId = 'emb-highlight-line';
-
-    const features: GeoJSON.Feature[] = [];
-    for (const [, tile] of this.embeddingCache) {
-      const corners = this.chunkCorners(tile.ci, tile.cj);
-      features.push({
-        type: 'Feature',
-        properties: {},
-        geometry: {
-          type: 'Polygon',
-          coordinates: [[corners[0], corners[1], corners[2], corners[3], corners[0]]],
-        },
-      });
-    }
-
-    const data: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features };
-
-    if (this.map.getSource(sourceId)) {
-      (this.map.getSource(sourceId) as unknown as { setData(d: GeoJSON.FeatureCollection): void }).setData(data);
-    } else {
-      this.map.addSource(sourceId, { type: 'geojson', data });
-      this.map.addLayer({
-        id: layerId,
-        type: 'line',
-        source: sourceId,
-        paint: {
-          'line-color': '#f59e0b',
-          'line-width': 2.5,
-          'line-opacity': 0.9,
-          'line-dasharray': [3, 2],
-        },
-      });
-    }
-
-    this.raiseOverlayLayers();
+    // No-op: per-tile borders removed; ROI polygon outline in App.svelte is sufficient
   }
 
   on<K extends keyof ZarrTesseraEvents>(
@@ -1151,7 +1152,7 @@ export class ZarrTesseraSource {
   }
 
   /** Ensure overlay layers stay above chunk data layers.
-   *  Order (bottom→top): chunk data, grid fills, loading anim, classification, emb-highlight, grid lines, UTM */
+   *  Order (bottom→top): chunk data, grid fills, loading anim, classification, grid lines, UTM */
   private raiseOverlayLayers(): void {
     const style = this.map!.getStyle();
     if (!style?.layers) return;
@@ -1164,7 +1165,6 @@ export class ZarrTesseraSource {
     }
     for (const id of loadLayers) this.map!.moveLayer(id);
     for (const id of classLayers) this.map!.moveLayer(id);
-    if (this.map!.getLayer('emb-highlight-line')) this.map!.moveLayer('emb-highlight-line');
     if (this.map!.getLayer('chunk-grid-lines')) this.map!.moveLayer('chunk-grid-lines');
     if (this.map!.getLayer('utm-zone-line')) this.map!.moveLayer('utm-zone-line');
   }
@@ -1446,13 +1446,12 @@ export class ZarrTesseraSource {
   }
 
   private removeOverlays(): void {
-    const layers = ['chunk-grid-lines', 'utm-zone-line', 'emb-highlight-line'];
+    const layers = ['chunk-grid-lines', 'utm-zone-line'];
     for (const id of layers) {
       if (this.map?.getLayer(id)) this.map.removeLayer(id);
     }
     if (this.map?.getSource('utm-zone')) this.map.removeSource('utm-zone');
     if (this.map?.getSource('chunk-grid')) this.map.removeSource('chunk-grid');
-    if (this.map?.getSource('emb-highlight')) this.map.removeSource('emb-highlight');
   }
 
   private addPreviewLayer(): void {
