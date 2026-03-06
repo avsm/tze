@@ -1348,9 +1348,11 @@ export class ZarrTesseraSource {
       if (!this.map || !this.map.getSource(sourceId)) return;
       renderFrame(canvas, t);
       const url = canvas.toDataURL('image/png');
-      const src = this.map.getSource(sourceId) as
-        { updateImage?: (opts: { url: string; coordinates: [number, number][] }) => void } | undefined;
-      src?.updateImage?.({ url, coordinates: corners });
+      try {
+        const src = this.map.getSource(sourceId) as
+          { updateImage?: (opts: { url: string; coordinates: [number, number][] }) => void } | undefined;
+        src?.updateImage?.({ url, coordinates: corners });
+      } catch { /* source may be removed mid-frame */ }
       this.loadingAnimations.set(key, requestAnimationFrame(animate));
     };
     this.loadingAnimations.set(key, requestAnimationFrame(animate));
