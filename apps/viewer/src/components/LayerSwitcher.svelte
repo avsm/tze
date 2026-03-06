@@ -19,6 +19,7 @@
     const map = $mapInstance;
     if (map && vectorOverlay && !map.getSource(VECTOR_SOURCE_ID)) {
       addVectorOverlay(map);
+      $zarrSource?.raiseAllLayers();
     }
   });
 
@@ -55,6 +56,7 @@
     } else {
       removeVectorOverlay(map);
     }
+    $zarrSource?.raiseAllLayers();
   }
 
   function addVectorOverlay(map: maplibregl.Map) {

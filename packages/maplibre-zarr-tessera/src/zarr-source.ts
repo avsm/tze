@@ -1408,17 +1408,30 @@ export class ZarrTesseraSource {
 
   /** Ensure overlay layers stay above chunk data layers.
    *  Order (bottom→top): chunk data, grid fills, loading anim, classification, grid lines, UTM */
+  /** Re-order all layers to the canonical z-order. Call after adding external overlay layers. */
+  public raiseAllLayers(): void {
+    this.raiseOverlayLayers();
+  }
+
   private raiseOverlayLayers(): void {
     const style = this.map!.getStyle();
     if (!style?.layers) return;
     // Collect layer IDs in a single pass, then move in order
+    const previewLayers: string[] = [];
+    const chunkLayers: string[] = [];
     const loadLayers: string[] = [];
     const classLayers: string[] = [];
     for (const layer of style.layers) {
-      if (layer.id.startsWith('zarr-load-lyr-')) loadLayers.push(layer.id);
+      if (layer.id.startsWith('zarr-preview-')) previewLayers.push(layer.id);
+      else if (layer.id.startsWith('zarr-chunk-lyr-')) chunkLayers.push(layer.id);
+      else if (layer.id.startsWith('zarr-load-lyr-')) loadLayers.push(layer.id);
       else if (layer.id.startsWith('zarr-class-lyr-')) classLayers.push(layer.id);
     }
-    // RGB region canvas (below everything else)
+    // Preview tiles (lowest — embeddings raster)
+    for (const id of previewLayers) this.map!.moveLayer(id);
+    // Per-chunk embedding layers
+    for (const id of chunkLayers) this.map!.moveLayer(id);
+    // RGB region canvas
     if (this.map!.getLayer('zarr-rgb-overlay-lyr')) this.map!.moveLayer('zarr-rgb-overlay-lyr');
     for (const id of loadLayers) this.map!.moveLayer(id);
     // Similarity overlay (single region-wide layer)
@@ -1432,7 +1445,7 @@ export class ZarrTesseraSource {
     // Similarity reference marker
     if (this.map!.getLayer('sim-ref-marker-ring')) this.map!.moveLayer('sim-ref-marker-ring');
     if (this.map!.getLayer('sim-ref-marker-dot')) this.map!.moveLayer('sim-ref-marker-dot');
-    // Vector overlay should be topmost
+    // Vector overlay should be topmost (above all embeddings/overlays)
     for (const vid of [
       'vector-landuse', 'vector-landcover', 'vector-water-fill', 'vector-waterway',
       'vector-water-line', 'vector-aeroway', 'vector-boundary',
