@@ -12,7 +12,7 @@ export type RoiRegion = {
 export const roiDrawing = writable(false);
 
 /** Active terra-draw mode (polygon or rectangle). */
-export const drawMode = writable<DrawMode>('polygon');
+export const drawMode = writable<DrawMode>('rectangle');
 
 /** All drawn ROI regions. */
 export const roiRegions = writable<RoiRegion[]>([]);
