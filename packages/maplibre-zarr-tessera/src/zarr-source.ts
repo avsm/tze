@@ -1694,7 +1694,6 @@ export class ZarrTesseraSource {
         id: `zarr-preview-${Date.now()}`,
         source: this.opts.globalPreviewUrl,
         variable: previewVar,
-        selector: { band: [0, 1, 2, 3] },
         clim: [0, 255],
         colormap: ['#000000', '#ffffff'],
         customFrag: `
