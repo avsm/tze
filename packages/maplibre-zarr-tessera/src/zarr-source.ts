@@ -1429,9 +1429,13 @@ export class ZarrTesseraSource {
     if (this.map!.getLayer('roi-regions-line')) this.map!.moveLayer('roi-regions-line');
     if (this.map!.getLayer('chunk-grid-lines')) this.map!.moveLayer('chunk-grid-lines');
     if (this.map!.getLayer('utm-zone-line')) this.map!.moveLayer('utm-zone-line');
-    // Similarity reference marker should be topmost
+    // Similarity reference marker
     if (this.map!.getLayer('sim-ref-marker-ring')) this.map!.moveLayer('sim-ref-marker-ring');
     if (this.map!.getLayer('sim-ref-marker-dot')) this.map!.moveLayer('sim-ref-marker-dot');
+    // Vector overlay should be topmost (roads, buildings, water, labels)
+    for (const vid of ['vector-roads', 'vector-buildings', 'vector-water-line', 'vector-labels']) {
+      if (this.map!.getLayer(vid)) this.map!.moveLayer(vid);
+    }
   }
 
   private removeChunkFromMap(key: string): void {

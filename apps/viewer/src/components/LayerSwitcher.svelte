@@ -15,7 +15,15 @@
   ];
 
   let selected = $state('osm');
-  let vectorOverlay = $state(false);
+  let vectorOverlay = $state(true);
+
+  // Auto-enable vector overlay when map becomes available
+  $effect(() => {
+    const map = $mapInstance;
+    if (map && vectorOverlay && !map.getSource(VECTOR_SOURCE_ID)) {
+      addVectorOverlay(map);
+    }
+  });
 
   function switchBasemap(id: string) {
     const map = $mapInstance;

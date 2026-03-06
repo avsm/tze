@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { Pencil, Square, X, Plus, Trash2, Download, Upload } from 'lucide-svelte';
+  import { Pentagon, BoxSelect, X, Plus, Trash2, Download, Upload } from 'lucide-svelte';
   import { roiDrawing, drawMode, roiRegions, roiLoading, roiTileCount, clearAllRegions, removeRegion, addRegion, type DrawMode } from '../stores/drawing';
 
-  const modes: { id: DrawMode; icon: typeof Pencil; tip: string }[] = [
-    { id: 'rectangle', icon: Square, tip: 'Rectangle' },
-    { id: 'polygon',   icon: Pencil, tip: 'Polygon' },
+  const modes: { id: DrawMode; icon: typeof BoxSelect; tip: string }[] = [
+    { id: 'rectangle', icon: BoxSelect,  tip: 'Rectangle' },
+    { id: 'polygon',   icon: Pentagon,   tip: 'Polygon' },
   ];
 
   let fileInput: HTMLInputElement;
