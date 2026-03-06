@@ -1756,6 +1756,9 @@ export class ZarrTesseraSource {
                 this.removeChunkFromMap(key);
             }
         }
+
+        // Ensure vector overlay and other layers stay above the preview
+        this.raiseOverlayLayers();
     } catch (err) {
         this.debug('error', `Failed to add preview layer: ${(err as Error).message}`);
         this.previewLayer = null;
