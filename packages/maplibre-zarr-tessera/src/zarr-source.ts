@@ -28,6 +28,7 @@ export class ZarrTesseraSource {
   /** Contiguous embedding buffer for all loaded tiles. */
   public embeddingRegion: EmbeddingRegion | null = null;
   private moveHandler: (() => void) | null = null;
+  private abortHandler: ((e: PromiseRejectionEvent) => void) | null = null;
   private listeners = new Map<string, Set<EventCallback<unknown>>>();
   /** Tracks active loading animations per chunk key → animation frame ID. */
   private loadingAnimations = new Map<string, number>();
@@ -59,6 +60,13 @@ export class ZarrTesseraSource {
     this.workerPool = new WorkerPool(
       Math.min(navigator.hardwareConcurrency || 4, 8)
     );
+
+    // Suppress AbortError from MapLibre ImageSource.updateImage internal fetches.
+    // These fire when a source is removed while an image load is in flight — benign.
+    this.abortHandler = (e: PromiseRejectionEvent) => {
+      if (e.reason?.name === 'AbortError') e.preventDefault();
+    };
+    window.addEventListener('unhandledrejection', this.abortHandler);
 
     try {
       this.debug('fetch', `Opening store: ${this.opts.url}`);
@@ -103,6 +111,10 @@ export class ZarrTesseraSource {
 
     if (this.moveHandler && this.map) {
       this.map.off('moveend', this.moveHandler);
+    }
+    if (this.abortHandler) {
+      window.removeEventListener('unhandledrejection', this.abortHandler);
+      this.abortHandler = null;
     }
     this.currentAbort?.abort();
     for (const [, frameId] of this.loadingAnimations) cancelAnimationFrame(frameId);
