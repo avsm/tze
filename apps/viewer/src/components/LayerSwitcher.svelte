@@ -88,15 +88,21 @@
     add('vector-landuse', {
       type: 'fill',
       'source-layer': 'landuse',
+      filter: ['in', 'class', 'park', 'cemetery', 'hospital', 'school', 'stadium', 'residential', 'industrial', 'commercial', 'railway'],
       paint: {
         'fill-color': ['match', ['get', 'class'],
-          'park', 'rgba(80, 200, 120, 0.12)',
-          'cemetery', 'rgba(80, 200, 120, 0.08)',
-          'hospital', 'rgba(255, 100, 100, 0.08)',
-          'school', 'rgba(255, 200, 80, 0.08)',
-          'stadium', 'rgba(200, 180, 100, 0.08)',
-          'rgba(0, 0, 0, 0)',
+          'park', '#50C878',
+          'cemetery', '#4A8860',
+          'hospital', '#FF6464',
+          'school', '#FFC850',
+          'stadium', '#C8B464',
+          'residential', '#B0A090',
+          'industrial', '#A090B0',
+          'commercial', '#90A0B0',
+          'railway', '#908080',
+          '#808080',
         ],
+        'fill-opacity': 0.2,
       },
     });
 
@@ -104,17 +110,20 @@
     add('vector-landcover', {
       type: 'fill',
       'source-layer': 'landcover',
+      filter: ['in', 'class', 'wood', 'grass', 'farmland', 'sand', 'wetland', 'ice', 'rock', 'shrub'],
       paint: {
         'fill-color': ['match', ['get', 'class'],
-          'wood', 'rgba(60, 160, 80, 0.15)',
-          'grass', 'rgba(80, 200, 100, 0.10)',
-          'farmland', 'rgba(180, 200, 80, 0.08)',
-          'sand', 'rgba(220, 200, 140, 0.10)',
-          'wetland', 'rgba(80, 180, 200, 0.10)',
-          'ice', 'rgba(200, 220, 255, 0.15)',
-          'rgba(0, 0, 0, 0)',
+          'wood', '#3CA050',
+          'grass', '#50C864',
+          'farmland', '#B4C850',
+          'sand', '#DCC88C',
+          'wetland', '#50B4C8',
+          'ice', '#C8DCFF',
+          'rock', '#A0A0A0',
+          'shrub', '#70B060',
+          '#808080',
         ],
-        'fill-opacity': ['interpolate', ['linear'], ['zoom'], 8, 0.6, 14, 0.3],
+        'fill-opacity': 0.2,
       },
     });
 
@@ -123,7 +132,8 @@
       type: 'fill',
       'source-layer': 'water',
       paint: {
-        'fill-color': 'rgba(60, 140, 200, 0.25)',
+        'fill-color': '#3C8CC8',
+        'fill-opacity': 0.3,
       },
     });
 
