@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Map as MapIcon, Globe, Moon, Grid3x3, Square } from 'lucide-svelte';
+  import { Map as MapIcon, Globe, Moon, Grid3x3, Square, Layers } from 'lucide-svelte';
   import { mapInstance } from '../stores/map';
   import { zarrSource, gridVisible, utmBoundaryVisible } from '../stores/zarr';
 
@@ -9,7 +9,13 @@
     { id: 'dark', label: 'Dark', icon: Moon, tiles: ['https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'], attribution: 'CartoDB, OSM' },
   ] as const;
 
+  const VECTOR_SOURCE_ID = 'vector-overlay-src';
+  const VECTOR_LAYER_IDS = [
+    'vector-roads', 'vector-buildings', 'vector-water-line', 'vector-labels',
+  ];
+
   let selected = $state('osm');
+  let vectorOverlay = $state(false);
 
   function switchBasemap(id: string) {
     const map = $mapInstance;
@@ -33,6 +39,105 @@
       { id: 'basemap', type: 'raster', source: 'basemap' },
       bottomLayerId,
     );
+  }
+
+  function toggleVectorOverlay() {
+    const map = $mapInstance;
+    if (!map) return;
+    vectorOverlay = !vectorOverlay;
+
+    if (vectorOverlay) {
+      addVectorOverlay(map);
+    } else {
+      removeVectorOverlay(map);
+    }
+  }
+
+  function addVectorOverlay(map: maplibregl.Map) {
+    if (!map.getSource(VECTOR_SOURCE_ID)) {
+      map.addSource(VECTOR_SOURCE_ID, {
+        type: 'vector',
+        url: 'https://tiles.openfreemap.org/planet',
+        attribution: '&copy; OpenFreeMap, OpenMapTiles, OSM',
+      });
+    }
+
+    // Roads — white lines
+    if (!map.getLayer('vector-roads')) {
+      map.addLayer({
+        id: 'vector-roads',
+        type: 'line',
+        source: VECTOR_SOURCE_ID,
+        'source-layer': 'transportation',
+        filter: ['in', 'class', 'motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'minor', 'service', 'path'],
+        paint: {
+          'line-color': 'rgba(255, 255, 255, 0.6)',
+          'line-width': ['interpolate', ['linear'], ['zoom'],
+            10, ['match', ['get', 'class'], 'motorway', 1.5, 'trunk', 1.2, 'primary', 1, 0.5],
+            16, ['match', ['get', 'class'], 'motorway', 4, 'trunk', 3, 'primary', 2.5, 'secondary', 2, 1],
+          ],
+        },
+      });
+    }
+
+    // Buildings — subtle outlines
+    if (!map.getLayer('vector-buildings')) {
+      map.addLayer({
+        id: 'vector-buildings',
+        type: 'line',
+        source: VECTOR_SOURCE_ID,
+        'source-layer': 'building',
+        minzoom: 14,
+        paint: {
+          'line-color': 'rgba(255, 255, 255, 0.35)',
+          'line-width': 0.5,
+        },
+      });
+    }
+
+    // Water boundaries
+    if (!map.getLayer('vector-water-line')) {
+      map.addLayer({
+        id: 'vector-water-line',
+        type: 'line',
+        source: VECTOR_SOURCE_ID,
+        'source-layer': 'water',
+        paint: {
+          'line-color': 'rgba(100, 200, 255, 0.5)',
+          'line-width': 1,
+        },
+      });
+    }
+
+    // Place labels
+    if (!map.getLayer('vector-labels')) {
+      map.addLayer({
+        id: 'vector-labels',
+        type: 'symbol',
+        source: VECTOR_SOURCE_ID,
+        'source-layer': 'place',
+        filter: ['in', 'class', 'city', 'town', 'village', 'suburb', 'neighbourhood'],
+        layout: {
+          'text-field': '{name:latin}',
+          'text-size': ['match', ['get', 'class'], 'city', 14, 'town', 12, 10],
+          'text-font': ['Noto Sans Regular'],
+          'text-anchor': 'center',
+          'text-max-width': 8,
+        },
+        paint: {
+          'text-color': 'rgba(255, 255, 255, 0.85)',
+          'text-halo-color': 'rgba(0, 0, 0, 0.7)',
+          'text-halo-width': 1.5,
+        },
+      });
+    }
+  }
+
+  function removeVectorOverlay(map: maplibregl.Map) {
+    for (const id of VECTOR_LAYER_IDS) {
+      if (map.getLayer(id)) map.removeLayer(id);
+    }
+    if (map.getSource(VECTOR_SOURCE_ID)) map.removeSource(VECTOR_SOURCE_ID);
   }
 
   function toggleGrid() {
@@ -63,6 +168,17 @@
     {/each}
 
     <div class="w-px bg-gray-800/60 mx-0.5"></div>
+
+    <button
+      onclick={toggleVectorOverlay}
+      title="Vector overlay"
+      class="w-7 h-7 flex items-center justify-center rounded border transition-all
+             {vectorOverlay
+               ? 'bg-term-cyan/15 text-term-cyan border-term-cyan/40'
+               : 'bg-gray-950 text-gray-500 border-gray-700/60 hover:text-gray-300'}"
+    >
+      <Layers size={14} />
+    </button>
 
     <button
       onclick={toggleGrid}
