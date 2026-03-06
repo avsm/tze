@@ -30,8 +30,8 @@
   $effect(() => {
     const src = $zarrSource;
     if (!src) { embeddingTileCount = 0; return; }
-    embeddingTileCount = src.embeddingCache.size;
-    const handler = () => { embeddingTileCount = src.embeddingCache.size; };
+    embeddingTileCount = src.regionTileCount();
+    const handler = () => { embeddingTileCount = src.regionTileCount(); };
     src.on('embeddings-loaded', handler);
     return () => src.off('embeddings-loaded', handler);
   });
@@ -45,8 +45,9 @@
     progressTotal = 0;
 
     try {
+      if (!src.embeddingRegion) return;
       const results = await runSolarSegmentation(
-        src.embeddingCache,
+        src.embeddingRegion,
         src,
         threshold,
         (done, total) => {

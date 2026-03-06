@@ -210,8 +210,7 @@ export const understandingEmbeddings: TutorialDef = {
         if (!ctx.zarrSource) return;
         const chunk = ctx.zarrSource.getChunkAtLngLat(0.1218, 52.22);
         if (!chunk) return;
-        const key = `${chunk.ci},${chunk.cj}`;
-        if (ctx.zarrSource.embeddingCache.has(key)) return;
+        if (ctx.zarrSource.regionHasTile(chunk.ci, chunk.cj)) return;
         const loaded = ctx.waitForEvent('embeddings-loaded', 30000);
         await ctx.zarrSource.loadFullChunk(chunk.ci, chunk.cj);
         await loaded;

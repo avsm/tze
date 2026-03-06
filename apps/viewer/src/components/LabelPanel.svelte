@@ -53,9 +53,10 @@
 
     try {
       source.clearClassificationOverlays();
+      if (!source.embeddingRegion) return;
       const opacity = $classificationOpacity;
       const results = await classifyTiles(
-        source.embeddingCache,
+        source.embeddingRegion,
         allLabels,
         allClasses,
         $kValue,

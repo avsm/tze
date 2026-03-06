@@ -1,4 +1,4 @@
-import type { TileEmbeddings } from '@ucam-eo/maplibre-zarr-tessera';
+import type { EmbeddingRegion } from '@ucam-eo/maplibre-zarr-tessera';
 import type { TileSimilarity } from './similarity';
 
 export interface SubsampleResult {
@@ -17,69 +17,64 @@ const NUM_BINS = 10;
  * Always includes the reference pixel.
  */
 export function subsampleEmbeddings(
-  embeddingCache: Map<string, TileEmbeddings>,
+  region: EmbeddingRegion,
   cachedScores: TileSimilarity[],
   refEmbedding: Float32Array,
   refPixel: { ci: number; cj: number; row: number; col: number },
 ): SubsampleResult {
-  // Build a lookup of scores by tile key
   const scoreMap = new Map<string, TileSimilarity>();
   for (const ts of cachedScores) {
     scoreMap.set(`${ts.ci}_${ts.cj}`, ts);
   }
 
-  // Collect all valid points into bins by score
   interface PointRef {
-    tileKey: string;
+    tileIdx: number;
     pixelIdx: number;
     score: number;
   }
 
   const bins: PointRef[][] = Array.from({ length: NUM_BINS }, () => []);
   let refPoint: PointRef | null = null;
-  let nBands = refEmbedding.length;
+  const nBands = region.nBands;
+  const tilePixels = region.tileW * region.tileH;
 
-  for (const [key, tile] of embeddingCache) {
+  for (let t = 0; t < region.loaded.length; t++) {
+    if (!region.loaded[t]) continue;
+    const ci = region.ciMin + Math.floor(t / region.gridCols);
+    const cj = region.cjMin + (t % region.gridCols);
+    const key = `${ci}_${cj}`;
     const ts = scoreMap.get(key);
     if (!ts) continue;
-    nBands = tile.nBands;
 
-    for (let i = 0; i < tile.width * tile.height; i++) {
+    for (let i = 0; i < tilePixels; i++) {
       const score = ts.scores[i];
       if (Number.isNaN(score)) continue;
 
-      const row = Math.floor(i / tile.width);
-      const col = i % tile.width;
+      const row = Math.floor(i / region.tileW);
+      const col = i % region.tileW;
 
-      // Check if this is the reference pixel
-      if (tile.ci === refPixel.ci && tile.cj === refPixel.cj &&
+      if (ci === refPixel.ci && cj === refPixel.cj &&
           row === refPixel.row && col === refPixel.col) {
-        refPoint = { tileKey: key, pixelIdx: i, score };
-        continue; // reserve slot for ref pixel
+        refPoint = { tileIdx: t, pixelIdx: i, score };
+        continue;
       }
 
       const bin = Math.min(Math.floor(score * NUM_BINS), NUM_BINS - 1);
-      bins[bin].push({ tileKey: key, pixelIdx: i, score });
+      bins[bin].push({ tileIdx: t, pixelIdx: i, score });
     }
   }
 
-  // Budget: MAX_POINTS - 1 (reserve one for ref pixel)
   const budget = MAX_POINTS - 1;
   const totalAvailable = bins.reduce((s, b) => s + b.length, 0);
   const sampleCount = Math.min(budget, totalAvailable);
-
-  // Proportional allocation per bin
   const selected: PointRef[] = [];
 
   if (totalAvailable <= budget) {
-    // Take all points
     for (const bin of bins) selected.push(...bin);
   } else {
-    // Stratified sampling
     const allocations = bins.map(b =>
       Math.floor((b.length / totalAvailable) * sampleCount)
     );
-    // Distribute remainder
     let remainder = sampleCount - allocations.reduce((a, b) => a + b, 0);
     for (let i = 0; remainder > 0 && i < NUM_BINS; i++) {
       if (allocations[i] < bins[i].length) {
@@ -87,14 +82,12 @@ export function subsampleEmbeddings(
         remainder--;
       }
     }
-
     for (let b = 0; b < NUM_BINS; b++) {
       const bin = bins[b];
       const n = allocations[b];
       if (n >= bin.length) {
         selected.push(...bin);
       } else {
-        // Fisher-Yates partial shuffle
         for (let i = bin.length - 1; i >= bin.length - n; i--) {
           const j = Math.floor(Math.random() * (i + 1));
           [bin[i], bin[j]] = [bin[j], bin[i]];
@@ -104,7 +97,6 @@ export function subsampleEmbeddings(
     }
   }
 
-  // Add ref pixel at the end
   const N = selected.length + (refPoint ? 1 : 0);
   const embeddings = new Float32Array(N * nBands);
   const scores = new Float32Array(N);
@@ -112,22 +104,18 @@ export function subsampleEmbeddings(
 
   for (let i = 0; i < selected.length; i++) {
     const p = selected[i];
-    const tile = embeddingCache.get(p.tileKey)!;
-    const offset = p.pixelIdx * nBands;
-    embeddings.set(tile.emb.subarray(offset, offset + nBands), i * nBands);
+    const offset = (p.tileIdx * tilePixels + p.pixelIdx) * nBands;
+    embeddings.set(region.emb.subarray(offset, offset + nBands), i * nBands);
     scores[i] = p.score;
   }
 
   if (refPoint) {
     refIndex = selected.length;
-    const tile = embeddingCache.get(refPoint.tileKey)!;
-    const offset = refPoint.pixelIdx * nBands;
-    embeddings.set(tile.emb.subarray(offset, offset + nBands), refIndex * nBands);
+    const offset = (refPoint.tileIdx * tilePixels + refPoint.pixelIdx) * nBands;
+    embeddings.set(region.emb.subarray(offset, offset + nBands), refIndex * nBands);
     scores[refIndex] = refPoint.score;
   } else {
-    // Fallback: use the refEmbedding directly
     refIndex = selected.length > 0 ? N - 1 : 0;
-    // Re-allocate if needed
     if (selected.length === 0) {
       const e = new Float32Array(nBands);
       e.set(refEmbedding);
@@ -140,31 +128,29 @@ export function subsampleEmbeddings(
 
 /**
  * Uniform random subsample of embeddings (no similarity scores needed).
- * Used for auto-UMAP before any reference pixel is selected.
  */
 export function subsampleUniform(
-  embeddingCache: Map<string, TileEmbeddings>,
+  region: EmbeddingRegion,
 ): SubsampleResult {
-  // Collect all valid pixel indices across tiles
-  interface PointRef { tileKey: string; pixelIdx: number; }
+  interface PointRef { tileIdx: number; pixelIdx: number; }
   const all: PointRef[] = [];
-  let nBands = 0;
+  const nBands = region.nBands;
+  const tilePixels = region.tileW * region.tileH;
 
-  for (const [key, tile] of embeddingCache) {
-    nBands = tile.nBands;
-    for (let i = 0; i < tile.width * tile.height; i++) {
-      const s = tile.scales[i];
-      if (s && !isNaN(s) && s !== 0) {
-        all.push({ tileKey: key, pixelIdx: i });
+  for (let t = 0; t < region.loaded.length; t++) {
+    if (!region.loaded[t]) continue;
+    const base = t * tilePixels * nBands;
+    for (let i = 0; i < tilePixels; i++) {
+      if (!isNaN(region.emb[base + i * nBands])) {
+        all.push({ tileIdx: t, pixelIdx: i });
       }
     }
   }
 
-  if (all.length === 0 || nBands === 0) {
+  if (all.length === 0) {
     return { embeddings: new Float32Array(0), scores: new Float32Array(0), refIndex: -1, count: 0, nBands: nBands || 128 };
   }
 
-  // Fisher-Yates partial shuffle to select up to MAX_POINTS
   const n = Math.min(MAX_POINTS, all.length);
   for (let i = all.length - 1; i >= all.length - n; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -173,13 +159,12 @@ export function subsampleUniform(
   const selected = all.slice(all.length - n);
 
   const embeddings = new Float32Array(n * nBands);
-  const scores = new Float32Array(n); // all zeros — no similarity info
+  const scores = new Float32Array(n);
 
   for (let i = 0; i < n; i++) {
     const p = selected[i];
-    const tile = embeddingCache.get(p.tileKey)!;
-    const offset = p.pixelIdx * nBands;
-    embeddings.set(tile.emb.subarray(offset, offset + nBands), i * nBands);
+    const offset = (p.tileIdx * tilePixels + p.pixelIdx) * nBands;
+    embeddings.set(region.emb.subarray(offset, offset + nBands), i * nBands);
   }
 
   return { embeddings, scores, refIndex: -1, count: n, nBands };

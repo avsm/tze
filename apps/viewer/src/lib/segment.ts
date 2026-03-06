@@ -1,5 +1,5 @@
 import * as ort from 'onnxruntime-web';
-import type { TileEmbeddings, ZarrTesseraSource } from '@ucam-eo/maplibre-zarr-tessera';
+import type { EmbeddingRegion, ZarrTesseraSource } from '@ucam-eo/maplibre-zarr-tessera';
 
 // Configure WASM paths for onnxruntime-web (relative to deploy base)
 const base = import.meta.env.BASE_URL;
@@ -57,7 +57,7 @@ async function getStats(): Promise<ModelStats> {
  * Caches probability maps so threshold can be adjusted without re-running.
  */
 export async function runSolarSegmentation(
-  embeddingCache: Map<string, TileEmbeddings>,
+  region: EmbeddingRegion,
   source: ZarrTesseraSource,
   threshold = 0.5,
   onProgress?: (done: number, total: number) => void,
@@ -66,20 +66,25 @@ export async function runSolarSegmentation(
 
   const mean = new Float32Array(stats.mean);
   const std = new Float32Array(stats.std);
+  const { tileW, tileH, nBands, emb, loaded, gridCols } = region;
+  const tilePixels = tileW * tileH;
 
   // Count total patches across all tiles for progress
   let totalPatches = 0;
-  const tileInfos: { key: string; tile: TileEmbeddings; patchCount: number }[] = [];
+  interface TileInfo { tileIdx: number; ci: number; cj: number; patchCount: number; }
+  const tileInfos: TileInfo[] = [];
 
-  for (const [key, tile] of embeddingCache) {
-    const { width, height } = tile;
+  for (let t = 0; t < loaded.length; t++) {
+    if (!loaded[t]) continue;
+    const ci = region.ciMin + Math.floor(t / gridCols);
+    const cj = region.cjMin + (t % gridCols);
     let count = 0;
-    for (let y = 0; y <= height - PATCH_SIZE; y += STRIDE) {
-      for (let x = 0; x <= width - PATCH_SIZE; x += STRIDE) {
+    for (let y = 0; y <= tileH - PATCH_SIZE; y += STRIDE) {
+      for (let x = 0; x <= tileW - PATCH_SIZE; x += STRIDE) {
         count++;
       }
     }
-    tileInfos.push({ key, tile, patchCount: count });
+    tileInfos.push({ tileIdx: t, ci, cj, patchCount: count });
     totalPatches += count;
   }
 
@@ -88,28 +93,22 @@ export async function runSolarSegmentation(
   let patchesInferred = 0;
   onProgress?.(0, totalPatches);
 
-  // Run inference per tile
-  for (const { key, tile } of tileInfos) {
-    const { ci, cj, emb, scales, width, height, nBands } = tile;
+  for (const { tileIdx, ci, cj } of tileInfos) {
     const corners = source.getChunkBoundsLngLat(ci, cj);
-    if (!corners) {
-      continue;
-    }
+    if (!corners) continue;
 
-    const prediction = new Float32Array(height * width);
-    const count = new Float32Array(height * width);
-    // Pre-allocate input buffer once per tile — reused across patches
+    const tileBase = tileIdx * tilePixels * nBands;
+    const prediction = new Float32Array(tilePixels);
+    const count = new Float32Array(tilePixels);
     const inputData = new Float32Array(nBands * PATCH_SIZE * PATCH_SIZE);
 
-    for (let y = 0; y <= height - PATCH_SIZE; y += STRIDE) {
-      for (let x = 0; x <= width - PATCH_SIZE; x += STRIDE) {
-        // Check if patch has any valid data
+    for (let y = 0; y <= tileH - PATCH_SIZE; y += STRIDE) {
+      for (let x = 0; x <= tileW - PATCH_SIZE; x += STRIDE) {
         let hasValid = false;
         for (let py = 0; py < PATCH_SIZE && !hasValid; py++) {
           for (let px = 0; px < PATCH_SIZE && !hasValid; px++) {
-            const idx = (y + py) * width + (x + px);
-            const s = scales[idx];
-            if (s && !isNaN(s) && isFinite(s)) hasValid = true;
+            const off = tileBase + ((y + py) * tileW + (x + px)) * nBands;
+            if (!isNaN(emb[off])) hasValid = true;
           }
         }
 
@@ -120,15 +119,12 @@ export async function runSolarSegmentation(
           continue;
         }
 
-        // Extract, normalize, and transpose patch: [H,W,C] → [1,C,H,W]
         for (let py = 0; py < PATCH_SIZE; py++) {
           for (let px = 0; px < PATCH_SIZE; px++) {
-            const srcIdx = ((y + py) * width + (x + px)) * nBands;
+            const srcOff = tileBase + ((y + py) * tileW + (x + px)) * nBands;
             for (let c = 0; c < nBands; c++) {
-              const val = emb[srcIdx + c];
-              const normalized = (val - mean[c]) / std[c];
-              // NCHW layout: [batch, channel, row, col]
-              inputData[c * PATCH_SIZE * PATCH_SIZE + py * PATCH_SIZE + px] = normalized;
+              const val = emb[srcOff + c];
+              inputData[c * PATCH_SIZE * PATCH_SIZE + py * PATCH_SIZE + px] = (val - mean[c]) / std[c];
             }
           }
         }
@@ -140,12 +136,11 @@ export async function runSolarSegmentation(
           const output = results.output;
           const outputData = output.data as Float32Array;
 
-          // Apply sigmoid and accumulate
           for (let py = 0; py < PATCH_SIZE; py++) {
             for (let px = 0; px < PATCH_SIZE; px++) {
               const outIdx = py * PATCH_SIZE + px;
               const prob = 1 / (1 + Math.exp(-outputData[outIdx]));
-              const mapIdx = (y + py) * width + (x + px);
+              const mapIdx = (y + py) * tileW + (x + px);
               prediction[mapIdx] += prob;
               count[mapIdx] += 1;
             }
@@ -163,12 +158,12 @@ export async function runSolarSegmentation(
       }
     }
 
-    // Average overlapping predictions
-    for (let i = 0; i < height * width; i++) {
+    for (let i = 0; i < tilePixels; i++) {
       if (count[i] > 0) prediction[i] /= count[i];
     }
 
-    probabilityCache.set(key, { ci, cj, probs: prediction, width, height, corners });
+    const key = `${ci}_${cj}`;
+    probabilityCache.set(key, { ci, cj, probs: prediction, width: tileW, height: tileH, corners });
   }
 
   onProgress?.(totalPatches, totalPatches);

@@ -87,7 +87,7 @@
 
   async function runUmap() {
     const src = $zarrSource;
-    if (!src || src.embeddingCache.size === 0) return;
+    if (!src || !src.embeddingRegion || src.regionTileCount() === 0) return;
 
     killWorker();
     status = 'Sampling...';
@@ -96,9 +96,10 @@
     const ref = $simRefEmbedding;
     const pixel = $simSelectedPixel;
 
+    const region = src.embeddingRegion!;
     const sample = (scores.length > 0 && ref && pixel)
-      ? subsampleEmbeddings(src.embeddingCache, scores, ref, pixel)
-      : subsampleUniform(src.embeddingCache);
+      ? subsampleEmbeddings(region, scores, ref, pixel)
+      : subsampleUniform(region);
 
     if (sample.count < 4) { status = 'Too few points'; return; }
 

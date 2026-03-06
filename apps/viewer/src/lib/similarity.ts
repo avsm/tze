@@ -1,4 +1,4 @@
-import type { TileEmbeddings } from '@ucam-eo/maplibre-zarr-tessera';
+import type { EmbeddingRegion } from '@ucam-eo/maplibre-zarr-tessera';
 
 /** Per-tile cached similarity data with normalised scores. */
 export interface TileSimilarity {
@@ -6,8 +6,7 @@ export interface TileSimilarity {
   cj: number;
   width: number;
   height: number;
-  /** Per-pixel normalised similarity in 0..1, calibrated to the observed
-   *  range across all tiles. Invalid pixels = NaN. */
+  /** Per-pixel normalised similarity in 0..1. NaN = invalid pixel. */
   scores: Float32Array;
   /** Reusable canvas for flicker-free updates. */
   canvas: HTMLCanvasElement;
@@ -20,22 +19,18 @@ export interface SimilarityOverlay {
 }
 
 /**
- * Compute cosine similarity of every pixel in loaded tiles to a reference
- * embedding using CPU dot products. For dim=128 this is fast enough (~256
- * FLOPs per pixel) and avoids GPU memory pressure that causes OOM on mobile.
- *
- * Scores are normalised to 0..1 based on the observed min/max across all
- * tiles so the threshold slider gives meaningful control even when raw
- * cosine similarities are tightly clustered.
+ * Compute cosine similarity of every pixel in the region to a reference
+ * embedding. Scores are normalised to 0..1 based on observed min/max.
  */
 export async function computeSimilarityScores(
-  embeddingCache: Map<string, TileEmbeddings>,
+  region: EmbeddingRegion,
   refEmbedding: Float32Array,
-  onTileDone?: (t: TileSimilarity) => void,
 ): Promise<TileSimilarity[]> {
   const D = refEmbedding.length;
+  const { tileW, tileH, nBands, emb, loaded, gridCols } = region;
+  const tilePixels = tileW * tileH;
 
-  // Pre-normalise reference vector (CPU)
+  // Pre-normalise reference vector
   let refNormSq = 0;
   for (let b = 0; b < D; b++) refNormSq += refEmbedding[b] * refEmbedding[b];
   const refScale = 1 / Math.sqrt(refNormSq + 1e-12);
@@ -44,26 +39,25 @@ export async function computeSimilarityScores(
 
   // First pass: compute raw cosine similarities per tile
   interface RawTile {
-    ci: number; cj: number; width: number; height: number;
+    ci: number; cj: number;
     scores: Float32Array;
   }
   const rawTiles: RawTile[] = [];
-
   let globalMin = Infinity;
   let globalMax = -Infinity;
 
-  for (const [, tile] of embeddingCache) {
-    const { ci, cj, emb, scales, width, height, nBands } = tile;
-    const scores = new Float32Array(width * height);
+  for (let t = 0; t < loaded.length; t++) {
+    if (!loaded[t]) continue;
+    const ci = region.ciMin + Math.floor(t / gridCols);
+    const cj = region.cjMin + (t % gridCols);
+    const scores = new Float32Array(tilePixels);
     scores.fill(NaN);
 
-    const npx = width * height;
-    for (let i = 0; i < npx; i++) {
-      const s = scales[i];
-      if (!s || isNaN(s) || s === 0) continue;
+    const base = t * tilePixels * nBands;
+    for (let i = 0; i < tilePixels; i++) {
+      const off = base + i * nBands;
+      if (isNaN(emb[off])) continue;
 
-      // Dot product and query norm in one pass over D dimensions
-      const off = i * nBands;
       let dot = 0, qSq = 0;
       for (let b = 0; b < D; b++) {
         const v = emb[off + b];
@@ -71,16 +65,14 @@ export async function computeSimilarityScores(
         qSq += v * v;
       }
       const cos = dot / Math.sqrt(qSq + 1e-12);
-
       scores[i] = cos;
       if (cos < globalMin) globalMin = cos;
       if (cos > globalMax) globalMax = cos;
     }
-
-    rawTiles.push({ ci, cj, width, height, scores });
+    rawTiles.push({ ci, cj, scores });
   }
 
-  // Second pass: normalise scores to 0..1 in-place, wrap as TileSimilarity
+  // Second pass: normalise to 0..1
   const range = globalMax - globalMin;
   const results: TileSimilarity[] = [];
 
@@ -88,8 +80,7 @@ export async function computeSimilarityScores(
     const { scores } = raw;
     if (range > 0) {
       for (let i = 0; i < scores.length; i++) {
-        const v = scores[i];
-        if (!isNaN(v)) scores[i] = (v - globalMin) / range;
+        if (!isNaN(scores[i])) scores[i] = (scores[i] - globalMin) / range;
       }
     } else {
       for (let i = 0; i < scores.length; i++) {
@@ -98,25 +89,21 @@ export async function computeSimilarityScores(
     }
 
     const canvas = document.createElement('canvas');
-    canvas.width = raw.width;
-    canvas.height = raw.height;
+    canvas.width = tileW;
+    canvas.height = tileH;
 
-    const result: TileSimilarity = {
+    results.push({
       ci: raw.ci, cj: raw.cj,
-      width: raw.width, height: raw.height,
+      width: tileW, height: tileH,
       scores, canvas,
-    };
-    results.push(result);
-    onTileDone?.(result);
+    });
   }
 
   return results;
 }
 
 /**
- * Render cached normalised similarity scores into overlay canvases, applying
- * a binary threshold (0..1). Updates canvases in-place for flicker-free
- * slider dragging.
+ * Render cached normalised similarity scores into overlay canvases.
  */
 export function renderSimilarityOverlays(
   tiles: TileSimilarity[],

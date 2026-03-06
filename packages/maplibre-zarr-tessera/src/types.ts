@@ -44,8 +44,6 @@ export interface UtmBounds {
 export interface CachedChunk {
   ci: number;
   cj: number;
-  embRaw: Uint8Array | null;
-  scalesRaw: Uint8Array | null;
   canvas: HTMLCanvasElement | null;
   sourceId: string | null;
   layerId: string | null;
@@ -80,14 +78,23 @@ export interface ZarrTesseraEvents {
   'debug': DebugLogEntry;
 }
 
-export interface TileEmbeddings {
-  ci: number;
-  cj: number;
-  emb: Float32Array;      // [h * w * nBands] dequantized float32 embeddings
-  scales: Float32Array;   // [h * w] scale values
-  width: number;
-  height: number;
-  nBands: number;
+/** Contiguous embedding buffer covering a rectangular chunk grid.
+ *  Tiles fill into the buffer at computed offsets as they load.
+ *  Invalid pixels use NaN in the embedding values. */
+export interface EmbeddingRegion {
+  ciMin: number; ciMax: number;
+  cjMin: number; cjMax: number;
+  gridCols: number;  // cjMax - cjMin + 1
+  gridRows: number;  // ciMax - ciMin + 1
+  tileW: number;     // pixels per tile (cols)
+  tileH: number;     // pixels per tile (rows)
+  nBands: number;    // embedding dimensions (e.g. 128)
+  /** Dequantized embeddings in tile-major, row-major layout.
+   *  Length = gridRows * gridCols * tileH * tileW * nBands.
+   *  NaN = invalid/nodata pixel. */
+  emb: Float32Array;
+  /** Per-tile loaded bitmap. 1 = tile present. */
+  loaded: Uint8Array;
 }
 
 export interface EmbeddingAt {

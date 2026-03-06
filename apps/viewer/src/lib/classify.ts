@@ -1,6 +1,6 @@
 import * as tf from '@tensorflow/tfjs-core';
 import '@tensorflow/tfjs-backend-webgl';
-import type { TileEmbeddings } from '@ucam-eo/maplibre-zarr-tessera';
+import type { EmbeddingRegion } from '@ucam-eo/maplibre-zarr-tessera';
 import type { LabelPoint, ClassDef } from '../stores/classifier';
 
 export interface ClassificationResult {
@@ -22,10 +22,10 @@ export interface ClassifyProgress {
 /** Callback fired after each GPU chunk with the updated canvas and class map. */
 export type OnBatchUpdate = (ci: number, cj: number, canvas: HTMLCanvasElement, classMap: Int16Array, width: number, height: number) => void;
 
-/** L2-normalise rows of a 2D tensor: x / ||x||₂  (functional API only) */
+/** L2-normalise rows of a 2D tensor */
 function l2Normalise(x: tf.Tensor2D): tf.Tensor2D {
-  const sqSum = tf.sum(tf.square(x), 1, true);   // [M, 1]
-  const norms = tf.sqrt(tf.add(sqSum, 1e-12));    // avoid div-by-zero
+  const sqSum = tf.sum(tf.square(x), 1, true);
+  const norms = tf.sqrt(tf.add(sqSum, 1e-12));
   const result = tf.div(x, norms) as tf.Tensor2D;
   sqSum.dispose();
   norms.dispose();
@@ -34,13 +34,9 @@ function l2Normalise(x: tf.Tensor2D): tf.Tensor2D {
 
 /**
  * Classify all pixels in loaded tiles using batched KNN on the GPU.
- *
- * Builds a [M, D] query matrix and a [N, D] training matrix, computes cosine
- * similarity via a single matMul, then topk for k-nearest — ~1 GPU call per
- * chunk of 8192 pixels instead of one per pixel.
  */
 export async function classifyTiles(
-  embeddingCache: Map<string, TileEmbeddings>,
+  region: EmbeddingRegion,
   labelPoints: LabelPoint[],
   classDefs: ClassDef[],
   k: number,
@@ -50,7 +46,6 @@ export async function classifyTiles(
 ): Promise<ClassificationResult[]> {
   await tf.ready();
 
-  // Build class color lookup
   const colorMap = new Map<number, [number, number, number]>();
   for (const cls of classDefs) {
     const hex = cls.color.replace('#', '');
@@ -61,7 +56,6 @@ export async function classifyTiles(
     ]);
   }
 
-  // Build training matrix [N, D] and label array [N]
   const nTrain = labelPoints.length;
   const dim = labelPoints[0].embedding.length;
   const trainFlat = new Float32Array(nTrain * dim);
@@ -71,94 +65,84 @@ export async function classifyTiles(
     trainLabels[i] = labelPoints[i].classId;
   }
 
-  // Normalise training vectors for cosine similarity (keep on GPU)
   const trainRaw = tf.tensor2d(trainFlat, [nTrain, dim]);
   const trainNormed = l2Normalise(trainRaw);
-  // Precompute transpose [D, N] to reuse across all chunks
   const trainNormedT = tf.transpose(trainNormed) as tf.Tensor2D;
   trainRaw.dispose();
 
   const results: ClassificationResult[] = [];
+  const { tileW, tileH, nBands, emb, loaded, gridCols } = region;
+  const tilePixels = tileW * tileH;
 
-  // Count total valid pixels across all tiles for progress
-  const tilesTotal = embeddingCache.size;
-  let tilesDone = 0;
+  // Count tiles and valid pixels for progress
+  let tilesTotal = 0;
   let totalValidPixels = 0;
-  let pixelsDone = 0;
-
-  for (const [, tile] of embeddingCache) {
-    for (let i = 0; i < tile.width * tile.height; i++) {
-      const s = tile.scales[i];
-      if (s && !isNaN(s) && s !== 0) totalValidPixels++;
+  for (let t = 0; t < loaded.length; t++) {
+    if (!loaded[t]) continue;
+    tilesTotal++;
+    const base = t * tilePixels * nBands;
+    for (let i = 0; i < tilePixels; i++) {
+      if (!isNaN(emb[base + i * nBands])) totalValidPixels++;
     }
   }
 
+  let tilesDone = 0;
+  let pixelsDone = 0;
   onProgress?.({ tilesDone: 0, tilesTotal, pixelsDone: 0, pixelsTotal: totalValidPixels });
 
-  // Process tiles in GPU chunks to bound memory and allow UI updates
   const GPU_CHUNK = 4096;
 
-  for (const [, tile] of embeddingCache) {
-    const { ci, cj, emb, scales, width, height, nBands } = tile;
-    const rgba = new Uint8ClampedArray(width * height * 4);
-    const classMap = new Int16Array(width * height).fill(-2); // -2 = nodata
+  for (let t = 0; t < loaded.length; t++) {
+    if (!loaded[t]) continue;
+    const ci = region.ciMin + Math.floor(t / gridCols);
+    const cj = region.cjMin + (t % gridCols);
+    const tileBase = t * tilePixels * nBands;
+
+    const rgba = new Uint8ClampedArray(tilePixels * 4);
+    const classMap = new Int16Array(tilePixels).fill(-2);
     let classified = 0;
     let uncertain = 0;
     let total = 0;
 
     const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
+    canvas.width = tileW;
+    canvas.height = tileH;
     const ctx = canvas.getContext('2d')!;
 
-    // First pass: collect valid pixel indices only (no data copy)
+    // Collect valid pixel indices
     const validIndices: number[] = [];
-    for (let i = 0; i < width * height; i++) {
-      const scale = scales[i];
-      if (!scale || isNaN(scale) || scale === 0) continue;
-      total++;
-      validIndices.push(i);
+    for (let i = 0; i < tilePixels; i++) {
+      if (!isNaN(emb[tileBase + i * nBands])) {
+        total++;
+        validIndices.push(i);
+      }
     }
     const nValid = validIndices.length;
-
-    // Reusable per-chunk buffer — filled directly from emb using indices
     const chunkBuf = new Float32Array(GPU_CHUNK * nBands);
 
-    // Process valid pixels in GPU-sized chunks
     for (let chunkStart = 0; chunkStart < nValid; chunkStart += GPU_CHUNK) {
       const chunkEnd = Math.min(chunkStart + GPU_CHUNK, nValid);
       const chunkSize = chunkEnd - chunkStart;
 
-      // Fill chunk buffer directly from emb
+      // Fill chunk buffer directly from region
       for (let i = 0; i < chunkSize; i++) {
-        const srcOff = validIndices[chunkStart + i] * nBands;
+        const srcOff = tileBase + validIndices[chunkStart + i] * nBands;
         const dstOff = i * nBands;
         for (let b = 0; b < nBands; b++) chunkBuf[dstOff + b] = emb[srcOff + b];
       }
 
-      // Build query tensor for this chunk [chunkSize, D]
       const queries = tf.tensor2d(chunkBuf.subarray(0, chunkSize * nBands), [chunkSize, nBands]);
-
-      // Normalise queries for cosine similarity
       const qNormed = l2Normalise(queries);
-
-      // Cosine similarity: qNormed @ trainNormedT → [chunkSize, N]
       const similarity = tf.matMul(qNormed, trainNormedT);
-
-      // Top-k most similar training points
       const effectiveK = Math.min(k, nTrain);
       const { indices: topkIdx } = tf.topk(similarity, effectiveK);
-
-      // Read indices back to CPU for voting
       const idxData = await topkIdx.data();
 
-      // Vote and assign colours — reuse a single Map to avoid per-pixel allocation
       const votes = new Map<number, number>();
       for (let i = 0; i < chunkSize; i++) {
         const pixelIdx = validIndices[chunkStart + i];
         const rgbaIdx = pixelIdx * 4;
 
-        // Count votes among k nearest
         votes.clear();
         for (let j = 0; j < effectiveK; j++) {
           const trainIdx = idxData[i * effectiveK + j];
@@ -185,22 +169,20 @@ export async function classifyTiles(
           rgba[rgbaIdx + 1] = 128;
           rgba[rgbaIdx + 2] = 128;
           rgba[rgbaIdx + 3] = 80;
-          classMap[pixelIdx] = -1; // uncertain
+          classMap[pixelIdx] = -1;
           uncertain++;
         }
       }
 
-      // Dispose GPU tensors
       queries.dispose();
       qNormed.dispose();
       similarity.dispose();
       topkIdx.dispose();
 
-      // Update canvas and report progress
-      const imgData = ctx.createImageData(width, height);
+      const imgData = ctx.createImageData(tileW, tileH);
       imgData.data.set(rgba);
       ctx.putImageData(imgData, 0, 0);
-      onBatchUpdate?.(ci, cj, canvas, classMap, width, height);
+      onBatchUpdate?.(ci, cj, canvas, classMap, tileW, tileH);
 
       pixelsDone += chunkSize;
       onProgress?.({ tilesDone, tilesTotal, pixelsDone, pixelsTotal: totalValidPixels });

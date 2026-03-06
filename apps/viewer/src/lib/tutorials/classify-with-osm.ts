@@ -127,9 +127,10 @@ export const classifyWithOsm: TutorialDef = {
         const opacity = get(ctx.stores.classificationOpacity);
 
         ctx.zarrSource.clearClassificationOverlays();
+        if (!ctx.zarrSource.embeddingRegion) return;
 
         await classifyTiles(
-          ctx.zarrSource.embeddingCache,
+          ctx.zarrSource.embeddingRegion,
           allLabels,
           allClasses,
           k,

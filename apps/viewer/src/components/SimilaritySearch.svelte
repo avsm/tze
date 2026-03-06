@@ -8,13 +8,13 @@
   let isComputing = $state(false);
   let pendingRecompute = false;
 
-  // Track embedding loads via events since embeddingCache is a plain Map
+  // Track embedding loads via events
   $effect(() => {
     const src = $zarrSource;
     if (!src) { $simEmbeddingTileCount = 0; return; }
-    $simEmbeddingTileCount = src.embeddingCache.size;
+    $simEmbeddingTileCount = src.regionTileCount();
     const handler = () => {
-      $simEmbeddingTileCount = src.embeddingCache.size;
+      $simEmbeddingTileCount = src.regionTileCount();
     };
     src.on('embeddings-loaded', handler);
     return () => src.off('embeddings-loaded', handler);
@@ -59,8 +59,9 @@
 
     try {
       src.clearClassificationOverlays();
+      if (!src.embeddingRegion) return;
       $simScores = await computeSimilarityScores(
-        src.embeddingCache,
+        src.embeddingRegion,
         $simRefEmbedding,
       );
       applyThreshold();

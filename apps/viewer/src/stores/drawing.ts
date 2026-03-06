@@ -62,7 +62,9 @@ export async function addRegion(feature: GeoJSON.Feature): Promise<void> {
   src.recolorAllChunks();
 
   // Record which chunks this region owns
-  const loadedKeys = chunks.map(c => `${c.ci}_${c.cj}`).filter(k => src.embeddingCache.has(k));
+  const loadedKeys = chunks
+    .filter(c => src.regionHasTile(c.ci, c.cj))
+    .map(c => `${c.ci}_${c.cj}`);
   roiRegions.update(rs =>
     rs.map(r => r.id === region.id ? { ...r, chunkKeys: loadedKeys } : r)
   );
@@ -85,11 +87,20 @@ export function removeRegion(regionId: string): void {
   }
   const exclusiveKeys = target.chunkKeys.filter(k => !otherKeys.has(k));
 
-  // Evict exclusive tiles
+  // Evict exclusive tiles from region
   const src = get(zarrSource);
-  if (src) {
+  if (src && src.embeddingRegion) {
+    const region = src.embeddingRegion;
     for (const k of exclusiveKeys) {
-      src.embeddingCache.delete(k);
+      const [ciStr, cjStr] = k.split('_');
+      const ci = parseInt(ciStr), cj = parseInt(cjStr);
+      if (ci >= region.ciMin && ci <= region.ciMax && cj >= region.cjMin && cj <= region.cjMax) {
+        const t = (ci - region.ciMin) * region.gridCols + (cj - region.cjMin);
+        const base = t * region.tileW * region.tileH * region.nBands;
+        const len = region.tileW * region.tileH * region.nBands;
+        for (let i = 0; i < len; i++) region.emb[base + i] = NaN;
+        region.loaded[t] = 0;
+      }
     }
     src.clearClassificationOverlays();
   }
@@ -101,7 +112,7 @@ export function removeRegion(regionId: string): void {
 export function clearAllRegions(): void {
   const src = get(zarrSource);
   if (src) {
-    src.embeddingCache.clear();
+    src.embeddingRegion = null;
     src.clearClassificationOverlays();
   }
   roiRegions.set([]);

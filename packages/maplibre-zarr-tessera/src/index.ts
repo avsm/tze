@@ -6,6 +6,6 @@ export type {
   ZarrTesseraEvents,
   DebugLogEntry,
   EmbeddingProgress,
-  TileEmbeddings,
+  EmbeddingRegion,
   EmbeddingAt,
 } from './types.js';

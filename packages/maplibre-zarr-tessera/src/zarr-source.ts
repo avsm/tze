@@ -2,7 +2,7 @@ import type { Map as MaplibreMap } from 'maplibre-gl';
 import type {
   ZarrTesseraOptions, StoreMetadata, CachedChunk,
   ChunkBounds, UtmBounds, PreviewMode, ZarrTesseraEvents, DebugLogEntry,
-  TileEmbeddings, EmbeddingAt,
+  EmbeddingRegion, EmbeddingAt,
 } from './types.js';
 import { UtmProjection } from './projection.js';
 import { openStore, fetchRegion, type ZarrStore } from './zarr-reader.js';
@@ -25,8 +25,8 @@ export class ZarrTesseraSource {
   private currentAbort: AbortController | null = null;
   private previewLayer: any | null = null;
 
-  /** Cache of raw 128-d embeddings for loaded tiles. */
-  public embeddingCache = new Map<string, TileEmbeddings>();
+  /** Contiguous embedding buffer for all loaded tiles. */
+  public embeddingRegion: EmbeddingRegion | null = null;
   private moveHandler: (() => void) | null = null;
   private listeners = new Map<string, Set<EventCallback<unknown>>>();
   /** Tracks active loading animations per chunk key → animation frame ID. */
@@ -108,7 +108,7 @@ export class ZarrTesseraSource {
     for (const [, frameId] of this.loadingAnimations) cancelAnimationFrame(frameId);
     this.loadingAnimations.clear();
     for (const [key] of this.chunkCache) this.removeChunkFromMap(key);
-    this.embeddingCache.clear();
+    this.embeddingRegion = null;
     this.classificationMaps.clear();
     this.chunkCache.clear();
     this.removeOverlays();
@@ -207,11 +207,13 @@ export class ZarrTesseraSource {
     this.debug('overlay', `Re-added ${reAdded} cached chunk layers`);
   }
 
-  /** Load full embedding data for a specific chunk (for band exploration). */
+  /** Load full embedding data for a specific chunk.
+   *  Dequantizes directly into the EmbeddingRegion buffer (NaN for invalid). */
   async loadFullChunk(ci: number, cj: number): Promise<void> {
     if (!this.store || !this.map) return;
+    // Ensure region exists (auto-create for standalone calls e.g. from tutorials)
+    this.ensureRegion(ci, ci, cj, cj);
     const key = this.chunkKey(ci, cj);
-    // Start loading animation over the preview tile
     this.startLoadingAnimation(ci, cj);
 
     try {
@@ -243,95 +245,45 @@ export class ZarrTesseraSource {
       this.debug('fetch', `Embeddings fetched (${ci},${cj}), rendering...`);
       this.emit('embedding-progress', { ci, cj, stage: 'rendering', bytes: expectedBytes });
 
-      // Copy the raw data out of zarrita's views into independent buffers.
-      // embView.data is Int8Array (1 byte/elem), scalesView.data is Float32Array (4 bytes/elem).
       const embInt8 = new Int8Array(embView.data.buffer, embView.data.byteOffset,
         embView.data.byteLength).slice();
-      // Reinterpret scales bytes as Float32 — create a fresh copy via Uint8Array round-trip
       const scalesCopy = new Uint8Array(scalesView.data.buffer, scalesView.data.byteOffset,
         scalesView.data.byteLength).slice();
       const scalesF32 = new Float32Array(scalesCopy.buffer);
 
-      // Render inline on main thread — avoids worker pool queue contention
-      // which caused the "rendering" phase to hang behind regular chunk loads.
-      const [bR, bG, bB] = this.opts.bands;
-      let minR = 127, maxR = -128, minG = 127, maxG = -128, minB = 127, maxB = -128;
-      let nValid = 0;
-      for (let i = 0; i < w * h; i++) {
-        if (isNaN(scalesF32[i]) || scalesF32[i] === 0) continue;
-        const base = i * nBands;
-        const vr = embInt8[base + bR], vg = embInt8[base + bG], vb = embInt8[base + bB];
-        if (vr < minR) minR = vr; if (vr > maxR) maxR = vr;
-        if (vg < minG) minG = vg; if (vg > maxG) maxG = vg;
-        if (vb < minB) minB = vb; if (vb > maxB) maxB = vb;
-        nValid++;
-      }
-
-      const rgba = new Uint8Array(w * h * 4);
-      if (nValid > 0 && !(maxR === minR && maxG === minG && maxB === minB)) {
-        const rangeR = maxR - minR || 1, rangeG = maxG - minG || 1, rangeB = maxB - minB || 1;
-        for (let i = 0; i < w * h; i++) {
-          const pi = i * 4;
-          const scale = scalesF32[i];
-          if (isNaN(scale) || scale === 0) { rgba[pi + 3] = 0; continue; }
-          const base = i * nBands;
-          rgba[pi]     = Math.max(0, Math.min(255, ((embInt8[base + bR] - minR) / rangeR) * 255));
-          rgba[pi + 1] = Math.max(0, Math.min(255, ((embInt8[base + bG] - minG) / rangeG) * 255));
-          rgba[pi + 2] = Math.max(0, Math.min(255, ((embInt8[base + bB] - minB) / rangeB) * 255));
-          rgba[pi + 3] = 255;
+      // Dequantize directly into the region buffer (NaN for invalid pixels)
+      const region = this.embeddingRegion;
+      if (region) {
+        const tIdx = (ci - region.ciMin) * region.gridCols + (cj - region.cjMin);
+        const pixBase = tIdx * region.tileW * region.tileH;
+        const embBase = pixBase * nBands;
+        for (let i = 0; i < h * w; i++) {
+          const s = scalesF32[i];
+          const valid = s && !isNaN(s) && isFinite(s);
+          const dst = embBase + i * nBands;
+          if (valid) {
+            for (let b = 0; b < nBands; b++) region.emb[dst + b] = embInt8[i * nBands + b] * s;
+          } else {
+            for (let b = 0; b < nBands; b++) region.emb[dst + b] = NaN;
+          }
         }
+        region.loaded[tIdx] = 1;
       }
 
-      this.debug('render', `Embedding render (${ci},${cj}): ${nValid} valid pixels`);
+      this.debug('render', `Embedding dequantized (${ci},${cj})`);
 
       // Stop animation and remove preview before adding embedding layer
       this.stopLoadingAnimation(ci, cj);
       const existing = this.chunkCache.get(key);
       if (existing?.sourceId) this.removeChunkFromMap(key);
 
-      let canvas: HTMLCanvasElement | null = null;
-      let sourceId: string | null = null;
-      let layerId: string | null = null;
-
-      if (nValid > 0) {
-        canvas = this.rgbaToCanvas(rgba.buffer, w, h);
-        ({ sourceId, layerId } = this.addChunkToMap(ci, cj, canvas));
-      }
-
-      const embU8 = new Uint8Array(embInt8.buffer);
-      const scalesU8 = new Uint8Array(scalesF32.buffer);
-
       this.chunkCache.set(key, {
         ci, cj,
-        embRaw: embU8,
-        scalesRaw: scalesU8,
-        canvas, sourceId, layerId, isPreview: false,
+        canvas: null, sourceId: null, layerId: null, isPreview: false,
       });
 
-      // Dequantize: float32 = int8 * scale (per-pixel scale factor)
-      const embF32 = new Float32Array(h * w * nBands);
-      for (let i = 0; i < h * w; i++) {
-        const s = scalesF32[i];
-        const valid = s && !isNaN(s) && isFinite(s);
-        for (let b = 0; b < nBands; b++) {
-          embF32[i * nBands + b] = valid ? embInt8[i * nBands + b] * s : 0;
-        }
-      }
-
-      // Store dequantized embeddings for classification/segmentation
-      this.embeddingCache.set(key, {
-        ci, cj,
-        emb: embF32,
-        scales: scalesF32,
-        width: w, height: h,
-        nBands,
-      });
-      this.debug('info', `Embeddings ready (${ci},${cj}): ${(embF32.byteLength / 1024).toFixed(0)} KB cached`);
-      this.emit('embedding-progress', { ci, cj, stage: 'done', bytes: embF32.byteLength });
+      this.emit('embedding-progress', { ci, cj, stage: 'done', bytes: w * h * nBands * 4 });
       this.emit('embeddings-loaded', { ci, cj });
-
-      // Update embedding highlight border on map
-      this.updateEmbeddingHighlights();
     } catch (err) {
       this.stopLoadingAnimation(ci, cj);
       this.debug('error', `Embedding load (${ci},${cj}) failed: ${(err as Error).message}`);
@@ -413,7 +365,7 @@ export class ZarrTesseraSource {
     for (let ci = ciMin; ci <= ciMax; ci++) {
       for (let cj = cjMin; cj <= cjMax; cj++) {
         if (this.store.chunkManifest && !this.store.chunkManifest.has(`${ci}_${cj}`)) continue;
-        if (this.embeddingCache.has(this.chunkKey(ci, cj))) continue;
+        if (this.regionHasTile(ci, cj)) continue;
 
         // Chunk bounds in UTM
         const cMinE = originE + cj * chunkW;
@@ -440,67 +392,64 @@ export class ZarrTesseraSource {
     return result;
   }
 
-  /** Re-render all embedding chunk tiles using a single global min/max
-   *  across all loaded tiles, so they share a consistent colour scale. */
-  /** Re-render all embedding chunk tiles using a single global min/max
-   *  across all loaded tiles, so they share a consistent colour scale. */
+  /** Re-render all embedding tiles using global min/max from the region buffer. */
   recolorAllChunks(): void {
-    if (!this.map || !this.store) return;
+    if (!this.map || !this.store || !this.embeddingRegion) return;
     const [bR, bG, bB] = this.opts.bands;
-    const nBands = this.store.meta.nBands;
+    const region = this.embeddingRegion;
+    const { nBands, tileW, tileH, emb, loaded } = region;
+    const tilePixels = tileW * tileH;
 
-    // First pass: compute global min/max across all cached chunks
-    let gMinR = 127, gMaxR = -128, gMinG = 127, gMaxG = -128, gMinB = 127, gMaxB = -128;
-    for (const [, entry] of this.chunkCache) {
-      if (entry.isPreview || !entry.embRaw || !entry.scalesRaw) continue;
-      const embInt8 = new Int8Array(entry.embRaw.buffer, entry.embRaw.byteOffset, entry.embRaw.byteLength);
-      const scalesF32 = new Float32Array(entry.scalesRaw.buffer, entry.scalesRaw.byteOffset, entry.scalesRaw.byteLength);
-      const npx = scalesF32.length;
-      for (let i = 0; i < npx; i++) {
-        if (isNaN(scalesF32[i]) || scalesF32[i] === 0) continue;
-        const base = i * nBands;
-        const vr = embInt8[base + bR], vg = embInt8[base + bG], vb = embInt8[base + bB];
+    // First pass: global min/max across all loaded tiles
+    let gMinR = Infinity, gMaxR = -Infinity;
+    let gMinG = Infinity, gMaxG = -Infinity;
+    let gMinB = Infinity, gMaxB = -Infinity;
+    const nTiles = loaded.length;
+    for (let t = 0; t < nTiles; t++) {
+      if (!loaded[t]) continue;
+      const base = t * tilePixels * nBands;
+      for (let i = 0; i < tilePixels; i++) {
+        const off = base + i * nBands;
+        if (isNaN(emb[off])) continue;
+        const vr = emb[off + bR], vg = emb[off + bG], vb = emb[off + bB];
         if (vr < gMinR) gMinR = vr; if (vr > gMaxR) gMaxR = vr;
         if (vg < gMinG) gMinG = vg; if (vg > gMaxG) gMaxG = vg;
         if (vb < gMinB) gMinB = vb; if (vb > gMaxB) gMaxB = vb;
       }
     }
 
-    if (gMaxR <= gMinR && gMaxG <= gMinG && gMaxB <= gMinB) return; // no valid data
+    if (!isFinite(gMinR)) return;
     const rangeR = gMaxR - gMinR || 1, rangeG = gMaxG - gMinG || 1, rangeB = gMaxB - gMinB || 1;
-    this.debug('render', `recolorAllChunks: R[${gMinR},${gMaxR}] G[${gMinG},${gMaxG}] B[${gMinB},${gMaxB}]`);
+    this.debug('render', `recolorAllChunks: R[${gMinR.toFixed(2)},${gMaxR.toFixed(2)}] G[${gMinG.toFixed(2)},${gMaxG.toFixed(2)}] B[${gMinB.toFixed(2)},${gMaxB.toFixed(2)}]`);
 
-    // Second pass: re-render each chunk with global scale, remove+re-add to map
-    for (const [key, entry] of this.chunkCache) {
-      if (entry.isPreview || !entry.embRaw || !entry.scalesRaw) continue;
-      const embInt8 = new Int8Array(entry.embRaw.buffer, entry.embRaw.byteOffset, entry.embRaw.byteLength);
-      const scalesF32 = new Float32Array(entry.scalesRaw.buffer, entry.scalesRaw.byteOffset, entry.scalesRaw.byteLength);
-      const embTile = this.embeddingCache.get(key);
-      if (!embTile) continue;
-      const { width: w, height: h } = embTile;
-      const rgba = new Uint8Array(w * h * 4);
+    // Second pass: render per-tile canvases with global scale
+    for (let t = 0; t < nTiles; t++) {
+      if (!loaded[t]) continue;
+      const ci = region.ciMin + Math.floor(t / region.gridCols);
+      const cj = region.cjMin + (t % region.gridCols);
+      const key = this.chunkKey(ci, cj);
+      const entry = this.chunkCache.get(key);
+      if (!entry) continue;
+
+      const base = t * tilePixels * nBands;
+      const rgba = new Uint8Array(tileW * tileH * 4);
       let nValid = 0;
-      for (let i = 0; i < w * h; i++) {
+      for (let i = 0; i < tilePixels; i++) {
+        const off = base + i * nBands;
         const pi = i * 4;
-        const s = scalesF32[i];
-        if (isNaN(s) || s === 0) { rgba[pi + 3] = 0; continue; }
-        const base = i * nBands;
-        rgba[pi]     = Math.max(0, Math.min(255, ((embInt8[base + bR] - gMinR) / rangeR) * 255));
-        rgba[pi + 1] = Math.max(0, Math.min(255, ((embInt8[base + bG] - gMinG) / rangeG) * 255));
-        rgba[pi + 2] = Math.max(0, Math.min(255, ((embInt8[base + bB] - gMinB) / rangeB) * 255));
+        if (isNaN(emb[off])) { rgba[pi + 3] = 0; continue; }
+        rgba[pi]     = Math.max(0, Math.min(255, ((emb[off + bR] - gMinR) / rangeR) * 255));
+        rgba[pi + 1] = Math.max(0, Math.min(255, ((emb[off + bG] - gMinG) / rangeG) * 255));
+        rgba[pi + 2] = Math.max(0, Math.min(255, ((emb[off + bB] - gMinB) / rangeB) * 255));
         rgba[pi + 3] = 255;
         nValid++;
       }
 
-      // Remove old tile from map
       if (entry.sourceId) this.removeChunkFromMap(key);
-
-      const canvas = this.rgbaToCanvas(rgba.buffer, w, h);
+      const canvas = this.rgbaToCanvas(rgba.buffer, tileW, tileH);
       entry.canvas = canvas;
-
-      // Re-add with fresh source
       if (nValid > 0) {
-        const { sourceId, layerId } = this.addChunkToMap(entry.ci, entry.cj, canvas);
+        const { sourceId, layerId } = this.addChunkToMap(ci, cj, canvas);
         entry.sourceId = sourceId;
         entry.layerId = layerId;
       } else {
@@ -510,26 +459,38 @@ export class ZarrTesseraSource {
     }
   }
 
-  /** Load a batch of embedding chunks with parallel concurrency,
-   *  calling onProgress after each completes.
+  /** Load a batch of embedding chunks with parallel concurrency.
+   *  Creates/grows the EmbeddingRegion to cover the chunk grid.
    *  Returns the number of chunks successfully loaded. */
   async loadChunkBatch(
     chunks: { ci: number; cj: number }[],
     onProgress?: (loaded: number, total: number) => void,
   ): Promise<number> {
+    if (!this.store || chunks.length === 0) return 0;
+
+    // Compute grid bounds for this batch
+    let ciMin = Infinity, ciMax = -Infinity, cjMin = Infinity, cjMax = -Infinity;
+    for (const { ci, cj } of chunks) {
+      if (ci < ciMin) ciMin = ci;
+      if (ci > ciMax) ciMax = ci;
+      if (cj < cjMin) cjMin = cj;
+      if (cj > cjMax) cjMax = cj;
+    }
+
+    // Create or grow the region
+    this.ensureRegion(ciMin, ciMax, cjMin, cjMax);
+
     let loaded = 0;
     let succeeded = 0;
     const total = chunks.length;
-    const concurrency = this.opts.concurrency ?? 4;
+    const concurrency = 8;
 
-    // Process chunks in parallel with concurrency limit
     let cursor = 0;
     const next = async (): Promise<void> => {
       while (cursor < total) {
         const idx = cursor++;
         const { ci, cj } = chunks[idx];
-        const key = this.chunkKey(ci, cj);
-        if (this.embeddingCache.has(key)) {
+        if (this.regionHasTile(ci, cj)) {
           succeeded++;
           loaded++;
           onProgress?.(loaded, total);
@@ -551,10 +512,88 @@ export class ZarrTesseraSource {
     return succeeded;
   }
 
-  /** Extract the 128-d embedding vector at a map coordinate.
-   *  Returns null if the chunk's embeddings haven't been loaded. */
+  /** Check if a tile is loaded in the region. */
+  regionHasTile(ci: number, cj: number): boolean {
+    const r = this.embeddingRegion;
+    if (!r) return false;
+    if (ci < r.ciMin || ci > r.ciMax || cj < r.cjMin || cj > r.cjMax) return false;
+    const t = (ci - r.ciMin) * r.gridCols + (cj - r.cjMin);
+    return r.loaded[t] === 1;
+  }
+
+  /** Return the number of loaded tiles in the region. */
+  regionTileCount(): number {
+    const r = this.embeddingRegion;
+    if (!r) return 0;
+    let n = 0;
+    for (let i = 0; i < r.loaded.length; i++) if (r.loaded[i]) n++;
+    return n;
+  }
+
+  /** Create or grow the EmbeddingRegion to cover the given bounds. */
+  private ensureRegion(ciMin: number, ciMax: number, cjMin: number, cjMax: number): void {
+    if (!this.store) return;
+    const cs = this.store.meta.chunkShape;
+    const nBands = this.store.meta.nBands;
+    const tileH = cs[0], tileW = cs[1];
+
+    const old = this.embeddingRegion;
+    if (old) {
+      // Check if existing region already covers these bounds
+      if (ciMin >= old.ciMin && ciMax <= old.ciMax && cjMin >= old.cjMin && cjMax <= old.cjMax) return;
+
+      // Grow: compute union bounds
+      const newCiMin = Math.min(old.ciMin, ciMin);
+      const newCiMax = Math.max(old.ciMax, ciMax);
+      const newCjMin = Math.min(old.cjMin, cjMin);
+      const newCjMax = Math.max(old.cjMax, cjMax);
+      const newCols = newCjMax - newCjMin + 1;
+      const newRows = newCiMax - newCiMin + 1;
+      const newTiles = newRows * newCols;
+      const tilePixels = tileW * tileH;
+
+      const newEmb = new Float32Array(newTiles * tilePixels * nBands);
+      newEmb.fill(NaN);
+      const newLoaded = new Uint8Array(newTiles);
+
+      // Copy old data into new buffer at correct offsets
+      for (let oci = old.ciMin; oci <= old.ciMax; oci++) {
+        for (let ocj = old.cjMin; ocj <= old.cjMax; ocj++) {
+          const oldT = (oci - old.ciMin) * old.gridCols + (ocj - old.cjMin);
+          if (!old.loaded[oldT]) continue;
+          const newT = (oci - newCiMin) * newCols + (ocj - newCjMin);
+          const oldBase = oldT * tilePixels * nBands;
+          const newBase = newT * tilePixels * nBands;
+          newEmb.set(old.emb.subarray(oldBase, oldBase + tilePixels * nBands), newBase);
+          newLoaded[newT] = 1;
+        }
+      }
+
+      this.embeddingRegion = {
+        ciMin: newCiMin, ciMax: newCiMax, cjMin: newCjMin, cjMax: newCjMax,
+        gridCols: newCols, gridRows: newRows,
+        tileW, tileH, nBands, emb: newEmb, loaded: newLoaded,
+      };
+      this.debug('info', `Region grown to [${newCiMin},${newCiMax}]x[${newCjMin},${newCjMax}] (${newTiles} tiles)`);
+    } else {
+      // Create new region
+      const gridCols = cjMax - cjMin + 1;
+      const gridRows = ciMax - ciMin + 1;
+      const nTiles = gridRows * gridCols;
+      const tilePixels = tileW * tileH;
+      const emb = new Float32Array(nTiles * tilePixels * nBands);
+      emb.fill(NaN);
+      this.embeddingRegion = {
+        ciMin, ciMax, cjMin, cjMax, gridCols, gridRows,
+        tileW, tileH, nBands, emb, loaded: new Uint8Array(nTiles),
+      };
+      this.debug('info', `Region created [${ciMin},${ciMax}]x[${cjMin},${cjMax}] (${nTiles} tiles, ${(emb.byteLength / 1024 / 1024).toFixed(0)} MB)`);
+    }
+  }
+
+  /** Extract the embedding vector at a map coordinate from the region buffer. */
   getEmbeddingAt(lng: number, lat: number): EmbeddingAt | null {
-    if (!this.store || !this.proj) return null;
+    if (!this.store || !this.proj || !this.embeddingRegion) return null;
     const [e, n] = this.proj.forward(lng, lat);
     const t = this.store.meta.transform;
     const px = t[0], originE = t[2], originN = t[5];
@@ -567,34 +606,32 @@ export class ZarrTesseraSource {
 
     const ci = Math.floor(globalRow / cs[0]);
     const cj = Math.floor(globalCol / cs[1]);
-    const key = this.chunkKey(ci, cj);
-    const tile = this.embeddingCache.get(key);
-    if (!tile) return null;
+    if (!this.regionHasTile(ci, cj)) return null;
 
+    const region = this.embeddingRegion;
     const row = globalRow - ci * cs[0];
     const col = globalCol - cj * cs[1];
-    if (row < 0 || row >= tile.height || col < 0 || col >= tile.width) return null;
+    if (row < 0 || row >= region.tileH || col < 0 || col >= region.tileW) return null;
 
-    // Check scale validity
-    const pixelIdx = row * tile.width + col;
-    const scale = tile.scales[pixelIdx];
-    if (!scale || isNaN(scale)) return null;
+    const tIdx = (ci - region.ciMin) * region.gridCols + (cj - region.cjMin);
+    const pixBase = tIdx * region.tileW * region.tileH;
+    const pixelIdx = row * region.tileW + col;
+    const offset = (pixBase + pixelIdx) * region.nBands;
 
-    // Extract embedding vector
-    const offset = pixelIdx * tile.nBands;
-    const embedding = tile.emb.slice(offset, offset + tile.nBands);
-
+    if (isNaN(region.emb[offset])) return null;
+    const embedding = region.emb.slice(offset, offset + region.nBands);
     return { embedding, ci, cj, row, col };
   }
 
   /** Extract embeddings for all valid pixels in a kernel around a map coordinate. */
   getEmbeddingsInKernel(lng: number, lat: number, kernelSize: number): EmbeddingAt[] {
-    if (!this.store || !this.proj) return [];
+    if (!this.store || !this.proj || !this.embeddingRegion) return [];
     const [e, n] = this.proj.forward(lng, lat);
     const t = this.store.meta.transform;
     const px = t[0], originE = t[2], originN = t[5];
     const cs = this.store.meta.chunkShape;
     const s = this.store.meta.shape;
+    const region = this.embeddingRegion;
 
     const centerCol = Math.floor((e - originE) / px);
     const centerRow = Math.floor((originN - n) / px);
@@ -609,31 +646,33 @@ export class ZarrTesseraSource {
 
         const ci = Math.floor(gr / cs[0]);
         const cj = Math.floor(gc / cs[1]);
-        const key = this.chunkKey(ci, cj);
-        const tile = this.embeddingCache.get(key);
-        if (!tile) continue;
+        if (!this.regionHasTile(ci, cj)) continue;
 
         const row = gr - ci * cs[0];
         const col = gc - cj * cs[1];
-        const pixelIdx = row * tile.width + col;
-        const scale = tile.scales[pixelIdx];
-        if (!scale || isNaN(scale)) continue;
+        const tIdx = (ci - region.ciMin) * region.gridCols + (cj - region.cjMin);
+        const pixBase = tIdx * region.tileW * region.tileH;
+        const pixelIdx = row * region.tileW + col;
+        const offset = (pixBase + pixelIdx) * region.nBands;
 
-        const offset = pixelIdx * tile.nBands;
-        const embedding = tile.emb.slice(offset, offset + tile.nBands);
+        if (isNaN(region.emb[offset])) continue;
+        const embedding = region.emb.slice(offset, offset + region.nBands);
         results.push({ embedding, ci, cj, row, col });
       }
     }
     return results;
   }
 
-  /** Compute the bounding box (in WGS84) of all loaded embedding tiles.
-   *  Returns [south, west, north, east] or null if no embeddings loaded. */
+  /** Compute the bounding box (in WGS84) of all loaded embedding tiles. */
   embeddingBoundsLngLat(): [number, number, number, number] | null {
-    if (this.embeddingCache.size === 0) return null;
+    const r = this.embeddingRegion;
+    if (!r || this.regionTileCount() === 0) return null;
     let south = 90, west = 180, north = -90, east = -180;
-    for (const [, tile] of this.embeddingCache) {
-      const corners = this.chunkCorners(tile.ci, tile.cj);
+    for (let t = 0; t < r.loaded.length; t++) {
+      if (!r.loaded[t]) continue;
+      const ci = r.ciMin + Math.floor(t / r.gridCols);
+      const cj = r.cjMin + (t % r.gridCols);
+      const corners = this.chunkCorners(ci, cj);
       for (const [lng, lat] of corners) {
         if (lat < south) south = lat;
         if (lat > north) north = lat;
@@ -1356,7 +1395,7 @@ export class ZarrTesseraSource {
 
       let result: Record<string, unknown>;
 
-      if (usePreview && !this.embeddingCache.has(key)) {
+      if (usePreview && !this.regionHasTile(ci, cj)) {
         const previewArr = this.opts.preview === 'pca'
           ? this.store!.pcaArr! : this.store!.rgbArr!;
         const rgbView = await fetchRegion(previewArr, [[r0, r1], [c0, c1], null]);
@@ -1398,8 +1437,6 @@ export class ZarrTesseraSource {
 
       this.chunkCache.set(key, {
         ci, cj,
-        embRaw: (result.embRaw as ArrayBuffer) ? new Uint8Array(result.embRaw as ArrayBuffer) : null,
-        scalesRaw: (result.scalesRaw as ArrayBuffer) ? new Uint8Array(result.scalesRaw as ArrayBuffer) : null,
         canvas, sourceId, layerId, isPreview: usePreview,
       });
       this.debug('render', `Chunk (${ci},${cj}): ${(result.nValid as number)} valid px, preview=${usePreview}`);
@@ -1408,47 +1445,15 @@ export class ZarrTesseraSource {
       if ((err as Error).name === 'AbortError') return;
       this.debug('error', `Chunk (${ci},${cj}) failed: ${(err as Error).message}`);
       this.chunkCache.set(key, {
-        ci, cj, embRaw: null, scalesRaw: null,
+        ci, cj,
         canvas: null, sourceId: null, layerId: null, isPreview: false,
       });
     }
   }
 
   private async reRenderChunks(): Promise<void> {
-    if (!this.workerPool || !this.store) return;
-    const tasks: Promise<void>[] = [];
-
-    for (const [key, entry] of this.chunkCache) {
-      if (!entry.embRaw) continue;
-      const wasOnMap = !!entry.sourceId;
-      if (wasOnMap) this.removeChunkFromMap(key);
-
-      const { r0, r1, c0, c1 } = this.chunkPixelBounds(entry.ci, entry.cj);
-      const h = r1 - r0;
-      const w = c1 - c0;
-      const embCopy = entry.embRaw.slice().buffer;
-      const scalesCopy = entry.scalesRaw!.slice().buffer;
-
-      const task = this.workerPool.dispatch({
-        type: 'render-emb', embRaw: embCopy, scalesRaw: scalesCopy,
-        width: w, height: h, nBands: this.store.meta.nBands, bands: this.opts.bands,
-      }, [embCopy, scalesCopy]).then((result) => {
-        entry.embRaw = new Uint8Array(result.embRaw as ArrayBuffer);
-        entry.scalesRaw = new Uint8Array(result.scalesRaw as ArrayBuffer);
-        if ((result.nValid as number) > 0) {
-          entry.canvas = this.rgbaToCanvas(result.rgba as ArrayBuffer, w, h);
-          if (wasOnMap) {
-            const ids = this.addChunkToMap(entry.ci, entry.cj, entry.canvas);
-            entry.sourceId = ids.sourceId;
-            entry.layerId = ids.layerId;
-          }
-        } else {
-          entry.canvas = null;
-        }
-      });
-      tasks.push(task);
-    }
-    await Promise.all(tasks);
+    // Re-render embedding tiles from the region buffer with current band selection
+    this.recolorAllChunks();
   }
 
   private addOverlays(): void {

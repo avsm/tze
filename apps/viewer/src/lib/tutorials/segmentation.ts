@@ -90,8 +90,7 @@ export const segmentationTutorial: TutorialDef = {
         if (!ctx.zarrSource) return;
         const chunk = ctx.zarrSource.getChunkAtLngLat(0.30, 52.27);
         if (!chunk) return;
-        const key = `${chunk.ci},${chunk.cj}`;
-        if (ctx.zarrSource.embeddingCache.has(key)) return;
+        if (ctx.zarrSource.regionHasTile(chunk.ci, chunk.cj)) return;
         const loaded = ctx.waitForEvent('embeddings-loaded', 30000);
         await ctx.zarrSource.loadFullChunk(chunk.ci, chunk.cj);
         await loaded;
