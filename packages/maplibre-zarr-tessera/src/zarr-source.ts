@@ -691,33 +691,31 @@ export class ZarrTesseraSource {
   }
 
   /** Add or update classification overlays for multiple tiles at once.
+   *  Uses CanvasSource for zero-cost updates (no PNG encoding).
    *  Only raises overlay layers once at the end (O(N) instead of O(N²)). */
   addClassificationOverlayBatch(tiles: { ci: number; cj: number; canvas: HTMLCanvasElement }[]): void {
     if (!this.map || tiles.length === 0) return;
     let needsRaise = false;
+    const toFlush: string[] = [];
 
     for (const { ci, cj, canvas } of tiles) {
       const key = this.chunkKey(ci, cj);
       const sourceId = `zarr-class-src-${key}`;
       const layerId = `zarr-class-lyr-${key}`;
       const corners = this.chunkCorners(ci, cj);
-      const dataUrl = canvas.toDataURL('image/png');
 
       const existingSource = this.map.getSource(sourceId) as
-        { updateImage?: (opts: { url: string; coordinates: [number, number][] }) => void } | undefined;
+        { play?: () => void; pause?: () => void } | undefined;
 
-      if (existingSource?.updateImage) {
-        try {
-          existingSource.updateImage({ url: dataUrl, coordinates: corners });
-        } catch {
-          // Source may have been removed — ignore
-        }
+      if (existingSource?.play) {
+        // Canvas already painted by caller — trigger texture re-read
+        toFlush.push(sourceId);
       } else {
         if (this.map.getLayer(layerId)) this.map.removeLayer(layerId);
         if (this.map.getSource(sourceId)) this.map.removeSource(sourceId);
 
         this.map.addSource(sourceId, {
-          type: 'image', url: dataUrl, coordinates: corners,
+          type: 'canvas', canvas, coordinates: corners, animate: false,
         });
         this.map.addLayer({
           id: layerId, type: 'raster', source: sourceId,
@@ -725,6 +723,13 @@ export class ZarrTesseraSource {
         });
         needsRaise = true;
       }
+    }
+
+    // Flush updated canvases: play() marks dirty, pause() triggers texture upload
+    for (const id of toFlush) {
+      const src = this.map.getSource(id) as { play?: () => void; pause?: () => void } | undefined;
+      src?.play?.();
+      src?.pause?.();
     }
 
     if (needsRaise) this.raiseOverlayLayers();
@@ -1282,6 +1287,9 @@ export class ZarrTesseraSource {
     }
     for (const id of loadLayers) this.map!.moveLayer(id);
     for (const id of classLayers) this.map!.moveLayer(id);
+    // ROI polygon outlines should be above classification overlays
+    if (this.map!.getLayer('roi-regions-fill')) this.map!.moveLayer('roi-regions-fill');
+    if (this.map!.getLayer('roi-regions-line')) this.map!.moveLayer('roi-regions-line');
     if (this.map!.getLayer('chunk-grid-lines')) this.map!.moveLayer('chunk-grid-lines');
     if (this.map!.getLayer('utm-zone-line')) this.map!.moveLayer('utm-zone-line');
   }

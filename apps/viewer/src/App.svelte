@@ -172,7 +172,7 @@
         id: 'roi-regions-line',
         type: 'line',
         source: 'roi-regions',
-        paint: { 'line-color': '#00e5ff', 'line-width': 1.5, 'line-opacity': 0.6, 'line-dasharray': [4, 2] },
+        paint: { 'line-color': '#00e5ff', 'line-width': 2, 'line-opacity': 0.9, 'line-dasharray': [4, 2] },
       });
 
       // Terra-draw for polygon/rectangle drawing
