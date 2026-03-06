@@ -11,7 +11,10 @@
 
   const VECTOR_SOURCE_ID = 'vector-overlay-src';
   const VECTOR_LAYER_IDS = [
-    'vector-roads', 'vector-buildings', 'vector-water-line', 'vector-labels',
+    'vector-landuse', 'vector-landcover', 'vector-water-fill', 'vector-waterway',
+    'vector-water-line', 'vector-aeroway', 'vector-boundary',
+    'vector-roads', 'vector-buildings', 'vector-road-labels',
+    'vector-poi', 'vector-labels',
   ];
 
   let selected = $state('osm');
@@ -77,75 +80,199 @@
       });
     }
 
-    // Roads — white lines
-    if (!map.getLayer('vector-roads')) {
-      map.addLayer({
-        id: 'vector-roads',
-        type: 'line',
-        source: VECTOR_SOURCE_ID,
-        'source-layer': 'transportation',
-        filter: ['in', 'class', 'motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'minor', 'service', 'path'],
-        paint: {
-          'line-color': 'rgba(255, 255, 255, 0.6)',
-          'line-width': ['interpolate', ['linear'], ['zoom'],
-            10, ['match', ['get', 'class'], 'motorway', 1.5, 'trunk', 1.2, 'primary', 1, 0.5],
-            16, ['match', ['get', 'class'], 'motorway', 4, 'trunk', 3, 'primary', 2.5, 'secondary', 2, 1],
-          ],
-        },
-      });
-    }
+    const add = (id: string, spec: Omit<maplibregl.LayerSpecification, 'id' | 'source'>) => {
+      if (!map.getLayer(id)) map.addLayer({ id, source: VECTOR_SOURCE_ID, ...spec } as maplibregl.LayerSpecification);
+    };
 
-    // Buildings — subtle outlines
-    if (!map.getLayer('vector-buildings')) {
-      map.addLayer({
-        id: 'vector-buildings',
-        type: 'line',
-        source: VECTOR_SOURCE_ID,
-        'source-layer': 'building',
-        minzoom: 14,
-        paint: {
-          'line-color': 'rgba(255, 255, 255, 0.35)',
-          'line-width': 0.5,
-        },
-      });
-    }
+    // Landuse — parks, forests, residential (subtle fills)
+    add('vector-landuse', {
+      type: 'fill',
+      'source-layer': 'landuse',
+      paint: {
+        'fill-color': ['match', ['get', 'class'],
+          'park', 'rgba(80, 200, 120, 0.12)',
+          'cemetery', 'rgba(80, 200, 120, 0.08)',
+          'hospital', 'rgba(255, 100, 100, 0.08)',
+          'school', 'rgba(255, 200, 80, 0.08)',
+          'stadium', 'rgba(200, 180, 100, 0.08)',
+          'rgba(0, 0, 0, 0)',
+        ],
+      },
+    });
+
+    // Landcover — grass, wood, sand, farmland
+    add('vector-landcover', {
+      type: 'fill',
+      'source-layer': 'landcover',
+      paint: {
+        'fill-color': ['match', ['get', 'class'],
+          'wood', 'rgba(60, 160, 80, 0.15)',
+          'grass', 'rgba(80, 200, 100, 0.10)',
+          'farmland', 'rgba(180, 200, 80, 0.08)',
+          'sand', 'rgba(220, 200, 140, 0.10)',
+          'wetland', 'rgba(80, 180, 200, 0.10)',
+          'ice', 'rgba(200, 220, 255, 0.15)',
+          'rgba(0, 0, 0, 0)',
+        ],
+        'fill-opacity': ['interpolate', ['linear'], ['zoom'], 8, 0.6, 14, 0.3],
+      },
+    });
+
+    // Water polygons — filled
+    add('vector-water-fill', {
+      type: 'fill',
+      'source-layer': 'water',
+      paint: {
+        'fill-color': 'rgba(60, 140, 200, 0.25)',
+      },
+    });
+
+    // Waterways — rivers, streams, canals
+    add('vector-waterway', {
+      type: 'line',
+      'source-layer': 'waterway',
+      paint: {
+        'line-color': 'rgba(100, 180, 240, 0.5)',
+        'line-width': ['match', ['get', 'class'],
+          'river', 2,
+          'canal', 1.5,
+          'stream', 1,
+          0.5,
+        ],
+      },
+    });
 
     // Water boundaries
-    if (!map.getLayer('vector-water-line')) {
-      map.addLayer({
-        id: 'vector-water-line',
-        type: 'line',
-        source: VECTOR_SOURCE_ID,
-        'source-layer': 'water',
-        paint: {
-          'line-color': 'rgba(100, 200, 255, 0.5)',
-          'line-width': 1,
-        },
-      });
-    }
+    add('vector-water-line', {
+      type: 'line',
+      'source-layer': 'water',
+      paint: {
+        'line-color': 'rgba(100, 200, 255, 0.5)',
+        'line-width': 1,
+      },
+    });
 
-    // Place labels
-    if (!map.getLayer('vector-labels')) {
-      map.addLayer({
-        id: 'vector-labels',
-        type: 'symbol',
-        source: VECTOR_SOURCE_ID,
-        'source-layer': 'place',
-        filter: ['in', 'class', 'city', 'town', 'village', 'suburb', 'neighbourhood'],
-        layout: {
-          'text-field': '{name:latin}',
-          'text-size': ['match', ['get', 'class'], 'city', 14, 'town', 12, 10],
-          'text-font': ['Noto Sans Regular'],
-          'text-anchor': 'center',
-          'text-max-width': 8,
-        },
-        paint: {
-          'text-color': 'rgba(255, 255, 255, 0.85)',
-          'text-halo-color': 'rgba(0, 0, 0, 0.7)',
-          'text-halo-width': 1.5,
-        },
-      });
-    }
+    // Aeroways — runways, taxiways
+    add('vector-aeroway', {
+      type: 'line',
+      'source-layer': 'aeroway',
+      minzoom: 11,
+      paint: {
+        'line-color': 'rgba(200, 180, 255, 0.5)',
+        'line-width': ['match', ['get', 'class'],
+          'runway', 4,
+          'taxiway', 2,
+          1,
+        ],
+      },
+    });
+
+    // Administrative boundaries
+    add('vector-boundary', {
+      type: 'line',
+      'source-layer': 'boundary',
+      filter: ['in', 'admin_level', 2, 4],
+      paint: {
+        'line-color': 'rgba(200, 160, 255, 0.4)',
+        'line-width': ['match', ['get', 'admin_level'], 2, 1.5, 0.8],
+        'line-dasharray': [3, 2],
+      },
+    });
+
+    // Roads — white lines
+    add('vector-roads', {
+      type: 'line',
+      'source-layer': 'transportation',
+      filter: ['in', 'class', 'motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'minor', 'service', 'path', 'rail', 'track'],
+      paint: {
+        'line-color': ['match', ['get', 'class'],
+          'rail', 'rgba(200, 160, 120, 0.5)',
+          'path', 'rgba(255, 255, 255, 0.3)',
+          'track', 'rgba(255, 255, 255, 0.25)',
+          'rgba(255, 255, 255, 0.6)',
+        ],
+        'line-width': ['interpolate', ['linear'], ['zoom'],
+          10, ['match', ['get', 'class'], 'motorway', 1.5, 'trunk', 1.2, 'primary', 1, 'rail', 0.8, 0.5],
+          16, ['match', ['get', 'class'], 'motorway', 4, 'trunk', 3, 'primary', 2.5, 'secondary', 2, 'rail', 1.5, 1],
+        ],
+        'line-dasharray': ['match', ['get', 'class'],
+          'rail', ['literal', [2, 2]],
+          'path', ['literal', [1, 1]],
+          ['literal', [1, 0]],
+        ],
+      },
+    });
+
+    // Buildings — subtle outlines
+    add('vector-buildings', {
+      type: 'line',
+      'source-layer': 'building',
+      minzoom: 14,
+      paint: {
+        'line-color': 'rgba(255, 255, 255, 0.35)',
+        'line-width': 0.5,
+      },
+    });
+
+    // Road labels
+    add('vector-road-labels', {
+      type: 'symbol',
+      'source-layer': 'transportation_name',
+      minzoom: 13,
+      layout: {
+        'text-field': '{name:latin}',
+        'text-size': 9,
+        'text-font': ['Noto Sans Regular'],
+        'symbol-placement': 'line',
+        'text-rotation-alignment': 'map',
+        'text-max-angle': 30,
+      },
+      paint: {
+        'text-color': 'rgba(255, 255, 255, 0.6)',
+        'text-halo-color': 'rgba(0, 0, 0, 0.6)',
+        'text-halo-width': 1,
+      },
+    });
+
+    // POI labels — shops, restaurants, etc.
+    add('vector-poi', {
+      type: 'symbol',
+      'source-layer': 'poi',
+      minzoom: 15,
+      filter: ['<=', 'rank', 20],
+      layout: {
+        'text-field': '{name:latin}',
+        'text-size': 9,
+        'text-font': ['Noto Sans Regular'],
+        'text-anchor': 'top',
+        'text-offset': [0, 0.5],
+        'text-max-width': 6,
+      },
+      paint: {
+        'text-color': 'rgba(255, 200, 100, 0.7)',
+        'text-halo-color': 'rgba(0, 0, 0, 0.6)',
+        'text-halo-width': 1,
+      },
+    });
+
+    // Place labels — cities, towns, villages
+    add('vector-labels', {
+      type: 'symbol',
+      'source-layer': 'place',
+      filter: ['in', 'class', 'city', 'town', 'village', 'suburb', 'neighbourhood', 'hamlet'],
+      layout: {
+        'text-field': '{name:latin}',
+        'text-size': ['match', ['get', 'class'], 'city', 14, 'town', 12, 'village', 10, 9],
+        'text-font': ['Noto Sans Regular'],
+        'text-anchor': 'center',
+        'text-max-width': 8,
+      },
+      paint: {
+        'text-color': 'rgba(255, 255, 255, 0.85)',
+        'text-halo-color': 'rgba(0, 0, 0, 0.7)',
+        'text-halo-width': 1.5,
+      },
+    });
   }
 
   function removeVectorOverlay(map: maplibregl.Map) {

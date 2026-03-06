@@ -1432,8 +1432,13 @@ export class ZarrTesseraSource {
     // Similarity reference marker
     if (this.map!.getLayer('sim-ref-marker-ring')) this.map!.moveLayer('sim-ref-marker-ring');
     if (this.map!.getLayer('sim-ref-marker-dot')) this.map!.moveLayer('sim-ref-marker-dot');
-    // Vector overlay should be topmost (roads, buildings, water, labels)
-    for (const vid of ['vector-roads', 'vector-buildings', 'vector-water-line', 'vector-labels']) {
+    // Vector overlay should be topmost
+    for (const vid of [
+      'vector-landuse', 'vector-landcover', 'vector-water-fill', 'vector-waterway',
+      'vector-water-line', 'vector-aeroway', 'vector-boundary',
+      'vector-roads', 'vector-buildings', 'vector-road-labels',
+      'vector-poi', 'vector-labels',
+    ]) {
       if (this.map!.getLayer(vid)) this.map!.moveLayer(vid);
     }
   }
