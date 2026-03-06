@@ -1,5 +1,6 @@
 import { writable, derived, get } from 'svelte/store';
 import { zarrSource } from './zarr';
+import { simEmbeddingTileCount } from './similarity';
 
 export type DrawMode = 'polygon' | 'rectangle';
 export type RoiRegion = {
@@ -115,7 +116,13 @@ export function removeRegion(regionId: string): void {
         region.loaded[t] = 0;
       }
     }
+    // If no loaded tiles remain, clear the region entirely to avoid
+    // stale bounds causing huge allocations on the next addRegion.
+    if (src.regionTileCount() === 0) {
+      src.embeddingRegion = null;
+    }
     src.clearClassificationOverlays();
+    simEmbeddingTileCount.set(src.regionTileCount());
   }
 
   roiRegions.update(rs => rs.filter(r => r.id !== regionId));

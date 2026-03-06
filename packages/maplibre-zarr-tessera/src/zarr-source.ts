@@ -37,6 +37,8 @@ export class ZarrTesseraSource {
   private tileProgress = new Map<string, number>();
   /** Per-pixel class ID maps from classification, keyed by chunk key. */
   private classificationMaps = new Map<string, { width: number; height: number; classMap: Int16Array }>();
+  /** Suppresses per-tile debug messages during batch loading. */
+  private batchLoading = false;
   /** Region-wide loading animation (covers entire ROI polygon). */
   private regionAnimation: RegionLoadingAnimation | null = null;
 
@@ -249,7 +251,7 @@ export class ZarrTesseraSource {
       const nBands = this.store.meta.nBands;
       const expectedBytes = w * h * nBands;
 
-      this.debug('fetch', `Loading embeddings (${ci},${cj}): ${w}x${h}x${nBands} = ${(expectedBytes / 1024).toFixed(0)} KB`);
+      if (!this.batchLoading) this.debug('fetch', `Loading embeddings (${ci},${cj}): ${w}x${h}x${nBands} = ${(expectedBytes / 1024).toFixed(0)} KB`);
       this.tileProgress.set(key, 0);
       this.emit('embedding-progress', { ci, cj, stage: 'fetching', bytes: expectedBytes, bytesLoaded: 0 });
 
@@ -268,7 +270,7 @@ export class ZarrTesseraSource {
         fetchRegion(this.store.embArr, [[r0, r1], [c0, c1], null], { onProgress }),
         fetchRegion(this.store.scalesArr, [[r0, r1], [c0, c1]]),
       ]);
-      this.debug('fetch', `Embeddings fetched (${ci},${cj}), rendering...`);
+      if (!this.batchLoading) this.debug('fetch', `Embeddings fetched (${ci},${cj}), rendering...`);
       this.emit('embedding-progress', { ci, cj, stage: 'rendering', bytes: expectedBytes });
 
       const embInt8 = new Int8Array(embView.data.buffer, embView.data.byteOffset,
@@ -296,7 +298,7 @@ export class ZarrTesseraSource {
         region.loaded[tIdx] = 1;
       }
 
-      this.debug('render', `Embedding dequantized (${ci},${cj})`);
+      if (!this.batchLoading) this.debug('render', `Embedding dequantized (${ci},${cj})`);
 
       // Stop animation and remove preview before adding embedding layer
       this.stopLoadingAnimation(ci, cj);
@@ -548,9 +550,12 @@ export class ZarrTesseraSource {
     // Create or grow the region
     this.ensureRegion(ciMin, ciMax, cjMin, cjMax);
 
+    const total = chunks.length;
+    this.debug('fetch', `Region download started: ${total} tiles [${ciMin},${ciMax}]×[${cjMin},${cjMax}]`);
+    this.batchLoading = true;
+
     let loaded = 0;
     let succeeded = 0;
-    const total = chunks.length;
     const concurrency = 8;
 
     let cursor = 0;
@@ -577,6 +582,8 @@ export class ZarrTesseraSource {
 
     const workers = Array.from({ length: Math.min(concurrency, total) }, () => next());
     await Promise.all(workers);
+    this.batchLoading = false;
+    this.debug('fetch', `Region download complete: ${succeeded}/${total} tiles loaded`);
     return succeeded;
   }
 
