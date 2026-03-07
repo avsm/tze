@@ -1,5 +1,4 @@
 import type { TutorialDef } from '../tutorial';
-import { clearSegmentation } from '../segment';
 import { segmentPolygons } from '../../stores/segmentation';
 import { addRegion } from '../../stores/drawing';
 
@@ -33,7 +32,6 @@ export const segmentationTutorial: TutorialDef = {
         ctx.stores.isClassified.set(false);
         ctx.manager.clearClassificationOverlays();
         // Clear previous segmentation state
-        clearSegmentation();
         segmentPolygons.set({ type: 'FeatureCollection', features: [] });
         await new Promise((r) => setTimeout(r, 300));
       },

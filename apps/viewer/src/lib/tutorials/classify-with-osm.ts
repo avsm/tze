@@ -1,6 +1,6 @@
 import type { TutorialDef } from '../tutorial';
 import { get } from 'svelte/store';
-import { classifyTiles } from '../classify';
+import { classifyTiles } from '@ucam-eo/tessera-tasks';
 import { cambridgeSetupSteps } from './setup-cambridge';
 
 export const classifyWithOsm: TutorialDef = {

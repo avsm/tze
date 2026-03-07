@@ -21,10 +21,11 @@ export function ortWasmPlugin(): Plugin {
       destDir = path.resolve(config.root, 'public/ort-wasm');
     },
     buildStart() {
-      // Locate onnxruntime-web package
+      // Locate onnxruntime-web package by resolving its main entry,
+      // then walking up to find the dist/ directory
       const require = createRequire(import.meta.url);
-      const ortPkg = require.resolve('onnxruntime-web/package.json');
-      const srcDir = path.resolve(path.dirname(ortPkg), 'dist');
+      const ortMain = require.resolve('onnxruntime-web');
+      const srcDir = path.resolve(path.dirname(ortMain));
 
       if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true });
       for (const file of [
