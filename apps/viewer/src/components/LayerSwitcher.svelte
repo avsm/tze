@@ -129,7 +129,7 @@
       'source-layer': 'water',
       paint: {
         'fill-color': '#3C8CC8',
-        'fill-opacity': 0.3,
+        'fill-opacity': 0.12,
       },
     });
 
