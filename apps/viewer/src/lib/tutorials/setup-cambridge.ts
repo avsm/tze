@@ -1,4 +1,5 @@
 import type { TutorialStep } from '../tutorial';
+import { addRegion } from '../../stores/drawing';
 
 /** Shared setup steps: fly to Cambridge, wait for zone, explain tiles, load embeddings. */
 export const cambridgeSetupSteps: TutorialStep[] = [
@@ -36,32 +37,33 @@ export const cambridgeSetupSteps: TutorialStep[] = [
     title: 'Loading Embeddings',
     description:
       'Tessera embeddings are stored as Zarr arrays on a remote server.\n' +
-      'We are fetching a small region of per-pixel embeddings to the browser — this streams the compressed chunks over the network and decodes them locally.',
+      'We are fetching a region of per-pixel embeddings to the browser — this streams the compressed chunks over the network and decodes them locally.',
     action: async (ctx) => {
       const center = ctx.manager.getChunkAtLngLat(0.1218, 52.22);
       if (!center) return;
-      const src = await ctx.manager.getSource(center.zoneId);
 
-      // Build a 7×7 grid of tiles around the center chunk
+      // Build a rectangle polygon covering a 7×7 grid around the center chunk
       const buf = 3;
-      const chunks: { ci: number; cj: number }[] = [];
-      for (let di = -buf; di <= buf; di++) {
-        for (let dj = -buf; dj <= buf; dj++) {
-          chunks.push({ ci: center.ci + di, cj: center.cj + dj });
-        }
-      }
+      const tlCorners = ctx.manager.getChunkBoundsLngLat(center.zoneId, center.ci - buf, center.cj - buf);
+      const brCorners = ctx.manager.getChunkBoundsLngLat(center.zoneId, center.ci + buf, center.cj + buf);
+      if (!tlCorners || !brCorners) return;
 
-      await src.loadChunkBatch(chunks);
-      ctx.stores.simEmbeddingTileCount.set(ctx.manager.totalTileCount());
+      const west = tlCorners[0][0], north = tlCorners[0][1];
+      const east = brCorners[2][0], south = brCorners[2][1];
 
-      // Zoom to fit the loaded region
-      const bounds = src.embeddingBoundsLngLat();
-      if (bounds) {
-        ctx.map.fitBounds(
-          [[bounds[1], bounds[0]], [bounds[3], bounds[2]]],
-          { padding: 80, duration: 1500 },
-        );
-      }
+      const feature: GeoJSON.Feature = {
+        type: 'Feature',
+        properties: {},
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[west, north], [east, north], [east, south], [west, south], [west, north]]],
+        },
+      };
+
+      await addRegion(feature);
+
+      // Zoom to fit the loaded region with some breathing room
+      ctx.map.fitBounds([[west, south], [east, north]], { padding: 120, duration: 1500 });
     },
     trigger: { kind: 'action-complete' },
   },
