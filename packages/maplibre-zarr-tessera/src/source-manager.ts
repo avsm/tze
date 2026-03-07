@@ -299,15 +299,6 @@ export class ZarrSourceManager {
     for (const src of this.sources.values()) src.setPreview(mode);
   }
 
-  setGridVisible(visible: boolean): void {
-    this.baseOpts.gridVisible = visible;
-    for (const src of this.sources.values()) src.setGridVisible(visible);
-  }
-
-  setUtmBoundaryVisible(visible: boolean): void {
-    this.baseOpts.utmBoundaryVisible = visible;
-    for (const src of this.sources.values()) src.setUtmBoundaryVisible(visible);
-  }
 
   setClassificationOpacity(opacity: number): void {
     for (const src of this.sources.values()) src.setClassificationOpacity(opacity);

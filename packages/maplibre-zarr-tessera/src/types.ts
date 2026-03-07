@@ -6,8 +6,6 @@ export interface ZarrTesseraOptions {
   maxCached?: number;
   maxLoadPerUpdate?: number;
   concurrency?: number;
-  gridVisible?: boolean;
-  utmBoundaryVisible?: boolean;
   /** URL for the global EPSG:4326 preview store (served via zarr:// protocol) */
   globalPreviewUrl?: string;
   /** Explicit bounds [west, south, east, north] in EPSG:4326 for the global preview */

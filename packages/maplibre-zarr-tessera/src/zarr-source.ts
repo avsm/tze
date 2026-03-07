@@ -52,8 +52,6 @@ export class ZarrTesseraSource {
       maxCached: options.maxCached ?? 50,
       maxLoadPerUpdate: options.maxLoadPerUpdate ?? 80,
       concurrency: options.concurrency ?? 4,
-      gridVisible: options.gridVisible ?? true,
-      utmBoundaryVisible: options.utmBoundaryVisible ?? true,
       globalPreviewUrl: options.globalPreviewUrl ?? '',
       globalPreviewBounds: options.globalPreviewBounds,
     };
@@ -87,8 +85,6 @@ export class ZarrTesseraSource {
       if (this.store.chunkManifest) this.debug('info', `Manifest: ${this.store.chunkManifest.size} chunks with data`);
       this.emit('metadata-loaded', this.store.meta);
 
-      // Add overlays
-      this.addOverlays();
 
       // Add zarr-layer preview if global preview URL is configured
       if (this.opts.globalPreviewUrl) {
@@ -134,7 +130,6 @@ export class ZarrTesseraSource {
     this.embeddingRegion = null;
     this.classificationMaps.clear();
     this.chunkCache.clear();
-    this.removeOverlays();
     this.workerPool?.terminate();
     this.store = null;
     this.proj = null;
@@ -186,30 +181,12 @@ export class ZarrTesseraSource {
     }
   }
 
-  setGridVisible(visible: boolean): void {
-    this.opts.gridVisible = visible;
-    const vis = visible ? 'visible' : 'none';
-    for (const id of ['chunk-grid-lines']) {
-      if (this.map?.getLayer(id)) this.map.setLayoutProperty(id, 'visibility', vis);
-    }
-  }
-
-  setUtmBoundaryVisible(visible: boolean): void {
-    this.opts.utmBoundaryVisible = visible;
-    const vis = visible ? 'visible' : 'none';
-    for (const id of ['utm-zone-line']) {
-      if (this.map?.getLayer(id)) this.map.setLayoutProperty(id, 'visibility', vis);
-    }
-  }
 
   /** Re-add all chunk, overlay, and grid layers to the map.
    *  Call after a basemap switch that preserves sources but resets layers. */
   reAddAllLayers(): void {
     if (!this.map || !this.store) return;
     this.debug('overlay', 'Re-adding all layers after basemap switch');
-
-    // Re-add overlays (removes first if present)
-    this.addOverlays();
 
     // Re-add the global preview layer if configured
     if (this.opts.globalPreviewUrl) {
@@ -1530,8 +1507,6 @@ export class ZarrTesseraSource {
     // ROI polygon outlines should be above classification overlays
     if (this.map!.getLayer('roi-regions-fill')) this.map!.moveLayer('roi-regions-fill');
     if (this.map!.getLayer('roi-regions-line')) this.map!.moveLayer('roi-regions-line');
-    if (this.map!.getLayer('chunk-grid-lines')) this.map!.moveLayer('chunk-grid-lines');
-    if (this.map!.getLayer('utm-zone-line')) this.map!.moveLayer('utm-zone-line');
     // Similarity reference marker
     if (this.map!.getLayer('sim-ref-marker-ring')) this.map!.moveLayer('sim-ref-marker-ring');
     if (this.map!.getLayer('sim-ref-marker-dot')) this.map!.moveLayer('sim-ref-marker-dot');
@@ -1717,86 +1692,6 @@ export class ZarrTesseraSource {
     this.recolorAllChunks();
   }
 
-  private addOverlays(): void {
-    if (!this.store || !this.map || !this.proj) return;
-    this.removeOverlays();
-    this.debug('overlay', 'Adding UTM zone + chunk grid overlays');
-
-    // UTM zone boundary
-    const zone = this.store.meta.utmZone;
-    const isSouth = this.proj.isSouth;
-    const lonMin = (zone - 1) * 6 - 180;
-    const lonMax = zone * 6 - 180;
-    const latMin = isSouth ? -80 : 0;
-    const latMax = isSouth ? 0 : 84;
-
-    this.map.addSource('utm-zone', {
-      type: 'geojson',
-      data: {
-        type: 'Feature', properties: {},
-        geometry: {
-          type: 'Polygon',
-          coordinates: [[[lonMin, latMin], [lonMax, latMin], [lonMax, latMax], [lonMin, latMax], [lonMin, latMin]]],
-        },
-      },
-    });
-
-    // Chunk grid (skip when zarr-layer handles preview)
-    if (!this.opts.globalPreviewUrl) {
-      const cs = this.store.meta.chunkShape;
-      const s = this.store.meta.shape;
-      const nRows = Math.ceil(s[0] / cs[0]);
-      const nCols = Math.ceil(s[1] / cs[1]);
-      const features: GeoJSON.Feature[] = [];
-
-      for (let ci = 0; ci < nRows; ci++) {
-        for (let cj = 0; cj < nCols; cj++) {
-          const hasData = this.store.chunkManifest
-            ? this.store.chunkManifest.has(`${ci}_${cj}`) : true;
-          const corners = this.chunkCorners(ci, cj);
-          features.push({
-            type: 'Feature',
-            properties: { ci, cj, hasData },
-            geometry: {
-              type: 'Polygon',
-              coordinates: [[corners[0], corners[1], corners[2], corners[3], corners[0]]],
-            },
-          });
-        }
-      }
-
-      this.map.addSource('chunk-grid', {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features },
-      });
-
-      const gridVis = this.opts.gridVisible ? 'visible' : 'none';
-
-      this.map.addLayer({
-        id: 'chunk-grid-lines', type: 'line', source: 'chunk-grid',
-        paint: {
-          'line-color': ['case', ['get', 'hasData'], '#00e5ff', '#374151'],
-          'line-width': ['case', ['get', 'hasData'], 0.5, 0.3],
-          'line-opacity': ['case', ['get', 'hasData'], 0.2, 0.1],
-        },
-        layout: { visibility: gridVis },
-      });
-    }
-    this.map.addLayer({
-      id: 'utm-zone-line', type: 'line', source: 'utm-zone',
-      paint: { 'line-color': '#39ff14', 'line-width': 2, 'line-opacity': 0.5, 'line-dasharray': [6, 4] },
-      layout: { visibility: this.opts.utmBoundaryVisible ? 'visible' : 'none' },
-    });
-  }
-
-  private removeOverlays(): void {
-    const layers = ['chunk-grid-lines', 'utm-zone-line'];
-    for (const id of layers) {
-      if (this.map?.getLayer(id)) this.map.removeLayer(id);
-    }
-    if (this.map?.getSource('utm-zone')) this.map.removeSource('utm-zone');
-    if (this.map?.getSource('chunk-grid')) this.map.removeSource('chunk-grid');
-  }
 
   private removePreviewLayer(): void {
     if (!this.map) return;

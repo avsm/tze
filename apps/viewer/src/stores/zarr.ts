@@ -10,5 +10,3 @@ export const loading = writable({ total: 0, done: 0 });
 export const status = writable('Ready');
 export const globalPreviewUrl = writable<string>('');
 export const globalPreviewBounds = writable<[number, number, number, number] | null>(null);
-export const gridVisible = writable(true);
-export const utmBoundaryVisible = writable(true);

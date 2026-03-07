@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { Globe, Grid3x3, Square, Layers } from 'lucide-svelte';
+  import { Globe, Layers } from 'lucide-svelte';
   import { mapInstance } from '../stores/map';
-  import { sourceManager, gridVisible, utmBoundaryVisible } from '../stores/zarr';
+  import { sourceManager } from '../stores/zarr';
 
   const VECTOR_SOURCE_ID = 'vector-overlay-src';
   const VECTOR_LAYER_IDS = [
@@ -302,15 +302,6 @@
     if (map.getSource(VECTOR_SOURCE_ID)) map.removeSource(VECTOR_SOURCE_ID);
   }
 
-  function toggleGrid() {
-    $gridVisible = !$gridVisible;
-    $sourceManager?.setGridVisible($gridVisible);
-  }
-
-  function toggleUtm() {
-    $utmBoundaryVisible = !$utmBoundaryVisible;
-    $sourceManager?.setUtmBoundaryVisible($utmBoundaryVisible);
-  }
 </script>
 
 <div class="px-3 py-3 border-b border-gray-800/60">
@@ -338,25 +329,5 @@
       <Layers size={14} />
     </button>
 
-    <button
-      onclick={toggleGrid}
-      title="Chunk grid"
-      class="w-7 h-7 flex items-center justify-center rounded border transition-all
-             {$gridVisible
-               ? 'bg-term-cyan/15 text-term-cyan border-term-cyan/40'
-               : 'bg-gray-950 text-gray-500 border-gray-700/60 hover:text-gray-300'}"
-    >
-      <Grid3x3 size={14} />
-    </button>
-    <button
-      onclick={toggleUtm}
-      title="UTM boundary"
-      class="w-7 h-7 flex items-center justify-center rounded border transition-all
-             {$utmBoundaryVisible
-               ? 'bg-green-400/15 text-green-400 border-green-400/40'
-               : 'bg-gray-950 text-gray-500 border-gray-700/60 hover:text-gray-300'}"
-    >
-      <Square size={14} />
-    </button>
   </div>
 </div>
