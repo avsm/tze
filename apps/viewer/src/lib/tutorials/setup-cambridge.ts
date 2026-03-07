@@ -36,14 +36,32 @@ export const cambridgeSetupSteps: TutorialStep[] = [
     title: 'Loading Embeddings',
     description:
       'Tessera embeddings are stored as Zarr arrays on a remote server.\n' +
-      'We are fetching one tile\'s worth of per-pixel embeddings to the browser right now — this streams the compressed chunks over the network and decodes them locally.',
+      'We are fetching a small region of per-pixel embeddings to the browser — this streams the compressed chunks over the network and decodes them locally.',
     action: async (ctx) => {
-      const chunk = ctx.manager.getChunkAtLngLat(0.1218, 52.22);
-      if (!chunk) return;
-      if (ctx.manager.regionHasTile(chunk.zoneId, chunk.ci, chunk.cj)) return;
-      const src = await ctx.manager.getSource(chunk.zoneId);
-      await src.loadFullChunk(chunk.ci, chunk.cj);
+      const center = ctx.manager.getChunkAtLngLat(0.1218, 52.22);
+      if (!center) return;
+      const src = await ctx.manager.getSource(center.zoneId);
+
+      // Build a 3×3 grid of tiles around the center chunk
+      const buf = 1;
+      const chunks: { ci: number; cj: number }[] = [];
+      for (let di = -buf; di <= buf; di++) {
+        for (let dj = -buf; dj <= buf; dj++) {
+          chunks.push({ ci: center.ci + di, cj: center.cj + dj });
+        }
+      }
+
+      await src.loadChunkBatch(chunks);
       ctx.stores.simEmbeddingTileCount.set(ctx.manager.totalTileCount());
+
+      // Zoom to fit the loaded region
+      const bounds = src.embeddingBoundsLngLat();
+      if (bounds) {
+        ctx.map.fitBounds(
+          [[bounds[1], bounds[0]], [bounds[3], bounds[2]]],
+          { padding: 40, duration: 1500 },
+        );
+      }
     },
     trigger: { kind: 'action-complete' },
   },
