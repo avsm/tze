@@ -225,6 +225,33 @@
 
       // Start with rectangle drawing active by default
       roiDrawing.set(true);
+
+      // 3D buildings — visible when map is pitched, at zoom >= 15
+      map.addSource('buildings-3d-src', {
+        type: 'vector',
+        url: 'https://tiles.openfreemap.org/planet',
+      });
+      map.addLayer({
+        id: '3d-buildings',
+        source: 'buildings-3d-src',
+        'source-layer': 'building',
+        type: 'fill-extrusion',
+        minzoom: 14,
+        paint: {
+          'fill-extrusion-color': '#aaa',
+          'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 5],
+          'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
+          'fill-extrusion-opacity': 0.7,
+        },
+      });
+      map.on('moveend', () => {
+        const vis = map.getPitch() > 0 ? 'visible' : 'none';
+        if (map.getLayer('3d-buildings')) {
+          map.setLayoutProperty('3d-buildings', 'visibility', vis);
+          // Keep buildings above embeddings/overlays
+          map.moveLayer('3d-buildings');
+        }
+      });
     });
 
     // Track hovered chunk to avoid redundant updates

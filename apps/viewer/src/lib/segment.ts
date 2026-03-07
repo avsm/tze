@@ -34,13 +34,9 @@ const probabilityCache = new Map<string, {
 
 async function getSession(): Promise<ort.InferenceSession> {
   if (cachedSession) return cachedSession;
-  try {
-    cachedSession = await ort.InferenceSession.create(`${base}models/solar_unet.onnx`, {
-      executionProviders: ['wasm'],
-    });
-  } catch (err) {
-    throw err;
-  }
+  cachedSession = await ort.InferenceSession.create(`${base}models/solar_unet.onnx`, {
+    executionProviders: ['wasm'],
+  });
   return cachedSession;
 }
 
@@ -53,7 +49,8 @@ async function getStats(): Promise<ModelStats> {
 }
 
 /**
- * Run solar panel segmentation on all loaded embedding tiles.
+ * Run solar panel segmentation across the full embedding region.
+ * Slides a 64×64 patch window over the region (which may span many small tiles).
  * Caches probability maps so threshold can be adjusted without re-running.
  */
 export async function runSolarSegmentation(
@@ -66,107 +63,131 @@ export async function runSolarSegmentation(
 
   const mean = new Float32Array(stats.mean);
   const std = new Float32Array(stats.std);
-  const { tileW, tileH, nBands, emb, loaded, gridCols } = region;
+  const { tileW, tileH, nBands, emb, loaded, gridCols, gridRows } = region;
   const tilePixels = tileW * tileH;
 
-  // Count total patches across all tiles for progress
-  let totalPatches = 0;
-  interface TileInfo { tileIdx: number; ci: number; cj: number; patchCount: number; }
-  const tileInfos: TileInfo[] = [];
-
-  for (let t = 0; t < loaded.length; t++) {
-    if (!loaded[t]) continue;
-    const ci = region.ciMin + Math.floor(t / gridCols);
-    const cj = region.cjMin + (t % gridCols);
-    let count = 0;
-    for (let y = 0; y <= tileH - PATCH_SIZE; y += STRIDE) {
-      for (let x = 0; x <= tileW - PATCH_SIZE; x += STRIDE) {
-        count++;
-      }
-    }
-    tileInfos.push({ tileIdx: t, ci, cj, patchCount: count });
-    totalPatches += count;
+  // Full region pixel dimensions (spans all tiles)
+  const fullH = gridRows * tileH;
+  const fullW = gridCols * tileW;
+  // Helper: get embedding offset for a global pixel coordinate
+  function embOffset(gy: number, gx: number): number {
+    const row = Math.floor(gy / tileH);
+    const col = Math.floor(gx / tileW);
+    const ly = gy % tileH;
+    const lx = gx % tileW;
+    const tileIdx = row * gridCols + col;
+    return (tileIdx * tilePixels + ly * tileW + lx) * nBands;
   }
+
+  // Helper: check if the tile containing a global pixel is loaded
+  function pixelLoaded(gy: number, gx: number): boolean {
+    const row = Math.floor(gy / tileH);
+    const col = Math.floor(gx / tileW);
+    return !!loaded[row * gridCols + col];
+  }
+
+  // Count patches across the full region
+  let totalPatches = 0;
+  for (let y = 0; y <= fullH - PATCH_SIZE; y += STRIDE) {
+    for (let x = 0; x <= fullW - PATCH_SIZE; x += STRIDE) {
+      totalPatches++;
+    }
+  }
+
+  if (totalPatches === 0) return [];
 
   let patchesDone = 0;
   let patchesSkipped = 0;
   let patchesInferred = 0;
   onProgress?.(0, totalPatches);
 
-  for (const { tileIdx, ci, cj } of tileInfos) {
-    const corners = source.getChunkBoundsLngLat(ci, cj);
-    if (!corners) continue;
+  const prediction = new Float32Array(fullH * fullW);
+  const count = new Float32Array(fullH * fullW);
+  const inputData = new Float32Array(nBands * PATCH_SIZE * PATCH_SIZE);
 
-    const tileBase = tileIdx * tilePixels * nBands;
-    const prediction = new Float32Array(tilePixels);
-    const count = new Float32Array(tilePixels);
-    const inputData = new Float32Array(nBands * PATCH_SIZE * PATCH_SIZE);
+  for (let y = 0; y <= fullH - PATCH_SIZE; y += STRIDE) {
+    for (let x = 0; x <= fullW - PATCH_SIZE; x += STRIDE) {
+      // Check if patch has any valid (loaded, non-NaN) data
+      let hasValid = false;
+      for (let py = 0; py < PATCH_SIZE && !hasValid; py++) {
+        for (let px = 0; px < PATCH_SIZE && !hasValid; px++) {
+          const gy = y + py, gx = x + px;
+          if (!pixelLoaded(gy, gx)) continue;
+          if (!isNaN(emb[embOffset(gy, gx)])) hasValid = true;
+        }
+      }
 
-    for (let y = 0; y <= tileH - PATCH_SIZE; y += STRIDE) {
-      for (let x = 0; x <= tileW - PATCH_SIZE; x += STRIDE) {
-        let hasValid = false;
-        for (let py = 0; py < PATCH_SIZE && !hasValid; py++) {
-          for (let px = 0; px < PATCH_SIZE && !hasValid; px++) {
-            const off = tileBase + ((y + py) * tileW + (x + px)) * nBands;
-            if (!isNaN(emb[off])) hasValid = true;
+      if (!hasValid) {
+        patchesDone++;
+        patchesSkipped++;
+        if (patchesDone % 16 === 0) onProgress?.(patchesDone, totalPatches);
+        continue;
+      }
+
+      // Fill input tensor: [1, C, H, W] NCHW layout
+      for (let py = 0; py < PATCH_SIZE; py++) {
+        for (let px = 0; px < PATCH_SIZE; px++) {
+          const off = embOffset(y + py, x + px);
+          for (let c = 0; c < nBands; c++) {
+            const val = emb[off + c];
+            inputData[c * PATCH_SIZE * PATCH_SIZE + py * PATCH_SIZE + px] = (val - mean[c]) / std[c];
           }
         }
+      }
 
-        if (!hasValid) {
-          patchesDone++;
-          patchesSkipped++;
-          onProgress?.(patchesDone, totalPatches);
-          continue;
-        }
+      const inputTensor = new ort.Tensor('float32', inputData.slice(), [1, nBands, PATCH_SIZE, PATCH_SIZE]);
+
+      try {
+        const results = await session.run({ input: inputTensor });
+        const outputData = results.output.data as Float32Array;
 
         for (let py = 0; py < PATCH_SIZE; py++) {
           for (let px = 0; px < PATCH_SIZE; px++) {
-            const srcOff = tileBase + ((y + py) * tileW + (x + px)) * nBands;
-            for (let c = 0; c < nBands; c++) {
-              const val = emb[srcOff + c];
-              inputData[c * PATCH_SIZE * PATCH_SIZE + py * PATCH_SIZE + px] = (val - mean[c]) / std[c];
-            }
+            const prob = 1 / (1 + Math.exp(-outputData[py * PATCH_SIZE + px]));
+            const mapIdx = (y + py) * fullW + (x + px);
+            prediction[mapIdx] += prob;
+            count[mapIdx] += 1;
           }
         }
+        patchesInferred++;
+      } catch (err) {
+        throw err;
+      }
 
-        const inputTensor = new ort.Tensor('float32', inputData.slice(), [1, nBands, PATCH_SIZE, PATCH_SIZE]);
-
-        try {
-          const results = await session.run({ input: inputTensor });
-          const output = results.output;
-          const outputData = output.data as Float32Array;
-
-          for (let py = 0; py < PATCH_SIZE; py++) {
-            for (let px = 0; px < PATCH_SIZE; px++) {
-              const outIdx = py * PATCH_SIZE + px;
-              const prob = 1 / (1 + Math.exp(-outputData[outIdx]));
-              const mapIdx = (y + py) * tileW + (x + px);
-              prediction[mapIdx] += prob;
-              count[mapIdx] += 1;
-            }
-          }
-          patchesInferred++;
-        } catch (err) {
-          throw err;
-        }
-
-        patchesDone++;
-        if (patchesDone % 4 === 0) {
-          onProgress?.(patchesDone, totalPatches);
-          await new Promise(r => setTimeout(r, 0));
-        }
+      patchesDone++;
+      if (patchesDone % 4 === 0) {
+        onProgress?.(patchesDone, totalPatches);
+        await new Promise(r => setTimeout(r, 0));
       }
     }
+  }
 
-    for (let i = 0; i < tilePixels; i++) {
-      if (count[i] > 0) prediction[i] /= count[i];
-    }
-
-    const key = `${ci}_${cj}`;
-    probabilityCache.set(key, { ci, cj, probs: prediction, width: tileW, height: tileH, corners });
+  // Average overlapping predictions
+  for (let i = 0; i < fullH * fullW; i++) {
+    if (count[i] > 0) prediction[i] /= count[i];
   }
 
   onProgress?.(totalPatches, totalPatches);
+  // Compute full-region corners for polygonization
+  const tlCorners = source.getChunkBoundsLngLat(region.ciMin, region.cjMin);
+  const trCorners = source.getChunkBoundsLngLat(region.ciMin, region.cjMax);
+  const brCorners = source.getChunkBoundsLngLat(region.ciMax, region.cjMax);
+  const blCorners = source.getChunkBoundsLngLat(region.ciMax, region.cjMin);
+  if (!tlCorners || !trCorners || !brCorners || !blCorners) return [];
+
+  const regionCorners: [[number, number], [number, number], [number, number], [number, number]] = [
+    tlCorners[0], // TL of top-left tile
+    trCorners[1], // TR of top-right tile
+    brCorners[2], // BR of bottom-right tile
+    blCorners[3], // BL of bottom-left tile
+  ];
+
+  probabilityCache.clear();
+  probabilityCache.set('region', {
+    ci: region.ciMin, cj: region.cjMin,
+    probs: prediction, width: fullW, height: fullH,
+    corners: regionCorners,
+  });
 
   return rethreshold(threshold);
 }
