@@ -2,12 +2,13 @@
   import { ChevronDown, Sun } from 'lucide-svelte';
   import { sourceManager } from '../stores/zarr';
   import { segmentPolygons } from '../stores/segmentation';
-  import {
-    runSolarSegmentation,
-    rethreshold,
-    clearSegmentation,
-    hasCachedProbabilities,
-  } from '../lib/segment';
+  import { SegmentationSession } from '@ucam-eo/tessera-tasks';
+
+  const segSession = new SegmentationSession({
+    modelUrl: `${import.meta.env.BASE_URL}models/solar_unet.onnx`,
+    statsUrl: `${import.meta.env.BASE_URL}models/solar_unet_stats.json`,
+    wasmPaths: `${import.meta.env.BASE_URL}ort-wasm/`,
+  });
 
   const DETECTORS = [
     { id: 'solar', label: 'Solar Panels', icon: Sun },
@@ -52,7 +53,7 @@
       for (const [zoneId, region] of regions) {
         const src = mgr.getOpenSource(zoneId);
         if (!src) continue;
-        const results = await runSolarSegmentation(
+        const results = await segSession.run(
           region,
           src,
           threshold,
@@ -76,15 +77,15 @@
 
   function updateThreshold(val: number) {
     threshold = val;
-    if (!hasCachedProbabilities()) return;
-    const results = rethreshold(val);
+    if (!segSession.hasCachedProbabilities) return;
+    const results = segSession.rethreshold(val);
     const features = results.flatMap(r => r.polygons);
     resultCount = features.length;
     $segmentPolygons = { type: 'FeatureCollection', features };
   }
 
   function handleClear() {
-    clearSegmentation();
+    segSession.clear();
     hasProbs = false;
     resultCount = 0;
     $segmentPolygons = { type: 'FeatureCollection', features: [] };
