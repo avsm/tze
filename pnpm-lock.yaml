@@ -5,8 +5,8 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  zarrita: link:../zarrita.js/packages/zarrita
-  '@zarrita/storage': link:../zarrita.js/packages/@zarrita-storage
+  zarrita: github:avsm/zarrita.js#coalesce&path:packages/zarrita
+  '@zarrita/storage': github:avsm/zarrita.js#coalesce&path:packages/@zarrita-storage
 
 importers:
 
@@ -73,8 +73,8 @@ importers:
         specifier: ^2.20.3
         version: 2.20.3
       zarrita:
-        specifier: link:../../../zarrita.js/packages/zarrita
-        version: link:../../../zarrita.js/packages/zarrita
+        specifier: github:avsm/zarrita.js#coalesce&path:packages/zarrita
+        version: https://codeload.github.com/avsm/zarrita.js/tar.gz/6b14536e76259174e6bf566880096302c165678a#path:packages/zarrita
     devDependencies:
       '@types/proj4':
         specifier: ^2.19.0
@@ -680,6 +680,10 @@ packages:
   '@webgpu/types@0.1.38':
     resolution: {integrity: sha512-7LrhVKz2PRh+DD7+S+PVaFd5HxaWQvoMqBbsV9fNJO1pjUs1P8bM2vQVNfk+3URTqbuTI7gkXi0rfsN0IadoBA==}
 
+  '@zarrita/storage@https://codeload.github.com/avsm/zarrita.js/tar.gz/6b14536e76259174e6bf566880096302c165678a#path:packages/@zarrita-storage':
+    resolution: {path: packages/@zarrita-storage, tarball: https://codeload.github.com/avsm/zarrita.js/tar.gz/6b14536e76259174e6bf566880096302c165678a}
+    version: 0.1.4
+
   '@zxing/text-encoding@0.9.0':
     resolution: {integrity: sha512-U/4aVJ2mxI0aDNI8Uq0wEhMgY+u4CNtEb0om3+y3+niDAsoTCOB33UF0sxpzqzdqXLqmvc+vZyAt4O8pPdfkwA==}
 
@@ -845,6 +849,9 @@ packages:
     peerDependenciesMeta:
       picomatch:
         optional: true
+
+  fflate@0.8.2:
+    resolution: {integrity: sha512-cPJU47OaAoCbg0pBvzsgpTPhmhqI5eJjh/JIu8tPj5q+T7iLvW/JAYUqmE7KOB4R1ZyEhzBaIQpQpardBF5z8A==}
 
   flatbuffers@25.9.23:
     resolution: {integrity: sha512-MI1qs7Lo4Syw0EOzUl0xjs2lsoeqFku44KpngfIduHBYvzm8h2+7K8YMQh1JtVVVrUvhLpNwqVi4DERegUJhPQ==}
@@ -1143,6 +1150,9 @@ packages:
       encoding:
         optional: true
 
+  numcodecs@0.3.2:
+    resolution: {integrity: sha512-6YSPnmZgg0P87jnNhi3s+FVLOcIn3y+1CTIgUulA3IdASzK9fJM87sUFkpyA+be9GibGRaST2wCgkD+6U+fWKw==}
+
   onnxruntime-common@1.24.2:
     resolution: {integrity: sha512-S0FFhJaI05jr1c3HVJ/DuPFB/aYdXmnUBuuQfuvLtcNn7WAfpm2ewSXn1vHs9Wa1l8T8OznhfCEdFv8qCn0/xw==}
 
@@ -1200,6 +1210,9 @@ packages:
   readdirp@4.1.2:
     resolution: {integrity: sha512-GDhwkLfywWL2s6vEjyhri+eXmfH6j1L7JE27WhqLeYzoh/A3DBaYGEj2H/HFZCn/kMfim73FXxEJTw06WtxQwg==}
     engines: {node: '>= 14.18.0'}
+
+  reference-spec-reader@0.2.0:
+    resolution: {integrity: sha512-q0mfCi5yZSSHXpCyxjgQeaORq3tvDsxDyzaadA/5+AbAUwRyRuuTh0aRQuE/vAOt/qzzxidJ5iDeu1cLHaNBlQ==}
 
   require-directory@2.1.1:
     resolution: {integrity: sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q==}
@@ -1331,11 +1344,18 @@ packages:
   undici-types@7.18.2:
     resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
 
+  unzipit@1.4.3:
+    resolution: {integrity: sha512-gsq2PdJIWWGhx5kcdWStvNWit9FVdTewm4SEG7gFskWs+XCVaULt9+BwuoBtJiRE8eo3L1IPAOrbByNLtLtIlg==}
+    engines: {node: '>=12'}
+
   urijs@1.19.11:
     resolution: {integrity: sha512-HXgFDgDommxn5/bIv0cnQZsPhHDA90NPHD6+c/v21U5+Sx5hoP8+dP9IZXBU1gIfvdRfhG8cel9QNPeionfcCQ==}
 
   util@0.12.5:
     resolution: {integrity: sha512-kZf/K6hEIrWHI6XqOFUiiMa+79wE/D8Q+NCNAWclkyg3b4d2k7s0QGepNjiABc+aR3N1PAyHL7p6UcLY6LmrnA==}
+
+  uzip-module@1.0.3:
+    resolution: {integrity: sha512-AMqwWZaknLM77G+VPYNZLEruMGWGzyigPK3/Whg99B3S6vGHuqsyl5ZrOv1UUF3paGK1U6PM0cnayioaryg/fA==}
 
   varint@6.0.0:
     resolution: {integrity: sha512-cXEIW6cfr15lFv563k4GuVuW/fiwjknytD37jIOLSdSWuOI6WnO/oKwmP2FQTU2l01LP8/M5TSAJpzUaGe3uWg==}
@@ -1465,6 +1485,10 @@ packages:
   yargs@17.7.2:
     resolution: {integrity: sha512-7dSzzRQ++CKnNI/krKnYRV7JKKPUXMEh61soaHKg9mrWEhzFWhFnxPxGl+69cD1Ou63C13NUPCnmIcrvqCuM6w==}
     engines: {node: '>=12'}
+
+  zarrita@https://codeload.github.com/avsm/zarrita.js/tar.gz/6b14536e76259174e6bf566880096302c165678a#path:packages/zarrita:
+    resolution: {path: packages/zarrita, tarball: https://codeload.github.com/avsm/zarrita.js/tar.gz/6b14536e76259174e6bf566880096302c165678a}
+    version: 0.6.1
 
   zimmerframe@1.1.4:
     resolution: {integrity: sha512-B58NGBEoc8Y9MWWCQGl/gq9xBCe4IiKM0a2x7GZdQKOW5Exr8S1W24J6OgM1njK8xCRGvAJIL/MxXHf6SkmQKQ==}
@@ -1914,6 +1938,11 @@ snapshots:
 
   '@webgpu/types@0.1.38': {}
 
+  '@zarrita/storage@https://codeload.github.com/avsm/zarrita.js/tar.gz/6b14536e76259174e6bf566880096302c165678a#path:packages/@zarrita-storage':
+    dependencies:
+      reference-spec-reader: 0.2.0
+      unzipit: 1.4.3
+
   '@zxing/text-encoding@0.9.0':
     optional: true
 
@@ -2073,6 +2102,8 @@ snapshots:
   fdir@6.5.0(picomatch@4.0.3):
     optionalDependencies:
       picomatch: 4.0.3
+
+  fflate@0.8.2: {}
 
   flatbuffers@25.9.23: {}
 
@@ -2344,6 +2375,10 @@ snapshots:
     dependencies:
       whatwg-url: 5.0.0
 
+  numcodecs@0.3.2:
+    dependencies:
+      fflate: 0.8.2
+
   onnxruntime-common@1.24.2: {}
 
   onnxruntime-web@1.24.2:
@@ -2407,6 +2442,8 @@ snapshots:
   quickselect@3.0.0: {}
 
   readdirp@4.1.2: {}
+
+  reference-spec-reader@0.2.0: {}
 
   require-directory@2.1.1: {}
 
@@ -2572,6 +2609,10 @@ snapshots:
 
   undici-types@7.18.2: {}
 
+  unzipit@1.4.3:
+    dependencies:
+      uzip-module: 1.0.3
+
   urijs@1.19.11: {}
 
   util@0.12.5:
@@ -2581,6 +2622,8 @@ snapshots:
       is-generator-function: 1.1.2
       is-typed-array: 1.1.15
       which-typed-array: 1.1.20
+
+  uzip-module@1.0.3: {}
 
   varint@6.0.0: {}
 
@@ -2723,5 +2766,10 @@ snapshots:
       string-width: 4.2.3
       y18n: 5.0.8
       yargs-parser: 21.1.1
+
+  zarrita@https://codeload.github.com/avsm/zarrita.js/tar.gz/6b14536e76259174e6bf566880096302c165678a#path:packages/zarrita:
+    dependencies:
+      '@zarrita/storage': https://codeload.github.com/avsm/zarrita.js/tar.gz/6b14536e76259174e6bf566880096302c165678a#path:packages/@zarrita-storage
+      numcodecs: 0.3.2
 
   zimmerframe@1.1.4: {}

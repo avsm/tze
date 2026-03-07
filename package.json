@@ -14,8 +14,8 @@
   "pnpm": {
     "onlyBuiltDependencies": ["esbuild"],
     "overrides": {
-      "zarrita": "link:../zarrita.js/packages/zarrita",
-      "@zarrita/storage": "link:../zarrita.js/packages/@zarrita-storage"
+      "zarrita": "github:avsm/zarrita.js#coalesce&path:packages/zarrita",
+      "@zarrita/storage": "github:avsm/zarrita.js#coalesce&path:packages/@zarrita-storage"
     }
   }
 }
