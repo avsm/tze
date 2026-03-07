@@ -34,8 +34,7 @@
     </button>
 
     {#if dropdownOpen}
-      <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-      <div class="fixed inset-0 z-30" onclick={() => { dropdownOpen = false; }}></div>
+      <button type="button" class="fixed inset-0 z-30 cursor-default" tabindex="-1" onclick={() => { dropdownOpen = false; }}></button>
       <div class="absolute top-full left-0 mt-1 z-40
                   bg-gray-950 border border-gray-700/80 rounded shadow-xl
                   min-w-[220px] py-1">

@@ -303,7 +303,7 @@
                    : 'text-gray-500 border-gray-700/60 hover:text-gray-400 hover:border-gray-600'}"
         title={tool.tip}
       >
-        <svelte:component this={tool.icon} size={13} />
+        <tool.icon size={13} />
       </button>
     {/each}
   </div>
@@ -321,7 +321,7 @@
                  ? 'text-term-cyan border-term-cyan/40 bg-term-cyan/5'
                  : 'text-gray-600 border-transparent hover:text-gray-400'}"
       >
-        <svelte:component this={tool.icon} size={11} />
+        <tool.icon size={11} />
         <span class="hidden md:inline">{tool.label}</span>
       </button>
     {/each}
@@ -385,8 +385,7 @@
     </button>
 
     {#if searchOpen}
-      <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-      <div class="fixed inset-0 z-30" onclick={closeSearch}></div>
+      <button type="button" class="fixed inset-0 z-30 cursor-default" tabindex="-1" onclick={closeSearch}></button>
       <div class="absolute top-full right-0 mt-1 z-40
                   bg-gray-950 border border-gray-700/80 rounded shadow-xl
                   min-w-[240px] py-1">
@@ -435,8 +434,7 @@
     </button>
 
     {#if regionsOpen}
-      <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-      <div class="fixed inset-0 z-30" onclick={() => { regionsOpen = false; }}></div>
+      <button type="button" class="fixed inset-0 z-30 cursor-default" tabindex="-1" onclick={() => { regionsOpen = false; }}></button>
       <div class="absolute top-full right-0 mt-1 z-40
                   bg-gray-950 border border-gray-700/80 rounded shadow-xl
                   min-w-[260px] p-2 space-y-2">

@@ -176,11 +176,11 @@
     onkeydown={(e) => e.key === 'Escape' && handleClose()}
   >
     <!-- Modal -->
-    <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="bg-gray-950 border border-gray-700/80 rounded-lg shadow-2xl shadow-cyan-900/30
              w-[400px] max-w-[90vw] font-mono text-gray-300 text-xs"
-      onclick={(e) => e.stopPropagation()}
+      onmousedown={(e) => e.stopPropagation()}
     >
       <!-- Header -->
       <div class="px-5 py-4 border-b border-gray-800/60 flex items-center justify-between">
