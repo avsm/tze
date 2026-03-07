@@ -138,23 +138,10 @@
       >Cancel</button>
     </div>
   {:else if $roiRegions.length === 0}
-    <!-- Empty state — prompt to select -->
-    <div class="rounded border border-dashed border-gray-700/60 p-3 space-y-2.5">
+    <!-- Empty state — hint to use top bar -->
+    <div class="rounded border border-dashed border-gray-700/60 p-3 space-y-2">
       <div class="text-[10px] text-gray-500 text-center leading-relaxed">
-        Draw a region on the map to load<br/>embeddings for analysis.
-      </div>
-      <div class="flex justify-center gap-1.5">
-        {#each modes as m}
-          <button
-            onclick={() => startDrawing(m.id)}
-            class="flex items-center gap-1 text-[10px] text-gray-400 hover:text-term-cyan
-                   px-2.5 py-1.5 rounded border border-gray-700/60 hover:border-term-cyan/40 transition-all"
-            title={m.tip}
-          >
-            <m.icon size={11} />
-            {m.tip}
-          </button>
-        {/each}
+        Use <span class="text-gray-400">Rect</span> or <span class="text-gray-400">Poly</span> in the toolbar to draw a region and load embeddings.
       </div>
       <div class="flex justify-center">
         <button

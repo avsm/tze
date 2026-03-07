@@ -12,7 +12,7 @@
     'vector-poi', 'vector-labels',
   ];
 
-  let satelliteOn = $state(false);
+  let satelliteOn = $state(true);
   let vectorOverlay = $state(true);
 
   // Auto-enable vector overlay when map becomes available

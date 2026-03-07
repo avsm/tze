@@ -1,70 +1,32 @@
 <script lang="ts">
-  import { Search, Tags, Scan } from 'lucide-svelte';
   import { activeTool, type ToolId } from '../stores/tools';
   import { sourceManager, metadata } from '../stores/zarr';
   import { segmentVisible } from '../stores/segmentation';
+  import { get } from 'svelte/store';
   import SimilaritySearch from './SimilaritySearch.svelte';
   import LabelPanel from './LabelPanel.svelte';
   import SegmentPanel from './SegmentPanel.svelte';
-  import RoiStrip from './RoiStrip.svelte';
 
   const enabled = $derived(!!$metadata);
 
-  const tools: { id: ToolId; label: string; icon: typeof Search }[] = [
-    { id: 'similarity', label: 'Similar', icon: Search },
-    { id: 'classifier', label: 'Classify', icon: Tags },
-    { id: 'segmenter',  label: 'Segment', icon: Scan },
-  ];
-
   let { similarityRef = $bindable(), onOpenOsm }: { similarityRef?: SimilaritySearch; onOpenOsm?: () => void } = $props();
 
-  function switchTool(id: ToolId) {
-    if (id === $activeTool) return;
-    const prev = $activeTool;
-
-    // Hide segment polygons when leaving the segmenter tab
-    if (prev === 'segmenter') {
-      $segmentVisible = false;
+  // Handle tool transition side effects reactively (tabs are in TopBar now)
+  let prevTool: ToolId | null = null;
+  $effect(() => {
+    const tool = $activeTool;
+    if (prevTool !== null && prevTool !== tool) {
+      if (prevTool === 'segmenter') segmentVisible.set(false);
+      get(sourceManager)?.clearClassificationOverlays();
+      if (tool === 'segmenter') segmentVisible.set(true);
+      if (tool === 'similarity') similarityRef?.restoreOverlays();
     }
-
-    // Clear classification overlays when leaving similarity/classifier
-    $sourceManager?.clearClassificationOverlays();
-
-    $activeTool = id;
-
-    // Show segment polygons when entering the segmenter tab
-    if (id === 'segmenter') {
-      $segmentVisible = true;
-    }
-
-    // Restore similarity overlays when returning to similarity tab
-    if (id === 'similarity') {
-      similarityRef?.restoreOverlays();
-    }
-  }
+    prevTool = tool;
+  });
 </script>
 
-<div class="transition-opacity" data-tutorial="tool-switcher"
+<div class="transition-opacity"
      class:opacity-40={!enabled} class:pointer-events-none={!enabled}>
-
-  <RoiStrip />
-
-  <!-- Tool tabs -->
-  <div class="flex border-b border-gray-800/60">
-    {#each tools as tool}
-      <button
-        onclick={() => switchTool(tool.id)}
-        class="flex-1 flex items-center justify-center gap-1.5 py-2 text-[10px] font-bold
-               tracking-wider transition-all border-b-2 -mb-px
-               {$activeTool === tool.id
-                 ? 'text-term-cyan border-term-cyan'
-                 : 'text-gray-600 border-transparent hover:text-gray-400'}"
-      >
-        <tool.icon size={12} />
-        {tool.label}
-      </button>
-    {/each}
-  </div>
 
   <!-- Active tool panel -->
   <div class="px-3 py-3">

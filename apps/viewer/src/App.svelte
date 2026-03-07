@@ -222,6 +222,9 @@
           }
         }
       });
+
+      // Start with rectangle drawing active by default
+      roiDrawing.set(true);
     });
 
     // Track hovered chunk to avoid redundant updates
