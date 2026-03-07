@@ -65,19 +65,28 @@ export async function addRegion(feature: GeoJSON.Feature): Promise<void> {
     src?.startRegionAnimation(geometry, chunks);
   }
 
-  // Load per zone with progress tracking
+  // Load per zone with progress tracking (throttled to one update per frame)
   const total = managedChunks.length;
   roiLoading.set({ loaded: 0, total });
   let globalLoaded = 0;
+  let rafPending = false;
 
   for (const [zoneId, chunks] of byZone) {
     const src = await manager.getSource(zoneId);
     const baseLoaded = globalLoaded;
     await src.loadChunkBatch(chunks, (loaded, _t) => {
       globalLoaded = baseLoaded + loaded;
-      roiLoading.set({ loaded: globalLoaded, total });
       src.updateRegionAnimation(loaded, chunks.length, chunks[Math.min(loaded - 1, chunks.length - 1)]?.ci, chunks[Math.min(loaded - 1, chunks.length - 1)]?.cj);
+      if (!rafPending) {
+        rafPending = true;
+        requestAnimationFrame(() => {
+          rafPending = false;
+          roiLoading.set({ loaded: globalLoaded, total });
+        });
+      }
     });
+    // Flush final count for this zone so the bar is accurate before next zone starts
+    roiLoading.set({ loaded: globalLoaded, total });
   }
 
   // Stop all animations and re-render

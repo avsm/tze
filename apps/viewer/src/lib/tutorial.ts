@@ -1,5 +1,5 @@
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import type { ZarrTesseraSource } from '@ucam-eo/maplibre-zarr-tessera';
+import type { ZarrSourceManager } from '@ucam-eo/maplibre-zarr-tessera';
 import type { Writable, Readable } from 'svelte/store';
 import type { ToolId } from '../stores/tools';
 import type { StoreMetadata } from '@ucam-eo/maplibre-zarr-tessera';
@@ -17,9 +17,7 @@ export interface TutorialStep {
   id: string;
   title: string;
   description: string;
-  /** Optional HTML content rendered below the description text. */
   html?: string;
-  /** Optional HTML content shown in a separate floating diagram panel. */
   diagram?: { title: string; html: string; url?: string };
   highlight?: string;
   arrow?: ArrowDirection;
@@ -38,13 +36,13 @@ export interface TutorialDef {
 
 export interface TutorialContext {
   map: MaplibreMap;
-  zarrSource: ZarrTesseraSource | null;
+  manager: ZarrSourceManager;
   stores: {
     activeTool: Writable<ToolId>;
     simThreshold: Writable<number>;
-    zarrSource: Writable<ZarrTesseraSource | null>;
+    sourceManager: Writable<ZarrSourceManager | null>;
     metadata: Readable<StoreMetadata | null>;
-    simScores: Writable<SimilarityResult | null>;
+    simScores: Writable<Map<string, SimilarityResult>>;
     simRefEmbedding: Writable<Float32Array | null>;
     simSelectedPixel: Writable<{ ci: number; cj: number; row: number; col: number; lng: number; lat: number } | null>;
     simEmbeddingTileCount: Writable<number>;

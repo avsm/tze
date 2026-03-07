@@ -23,7 +23,7 @@ export const classifyWithOsm: TutorialDef = {
       description: 'Clearing previous state and switching to the Classifier tab...',
       action: async (ctx) => {
         // Clear similarity state from a previous tutorial
-        ctx.stores.simScores.set([]);
+        ctx.stores.simScores.set(new Map());
         ctx.stores.simRefEmbedding.set(null);
         ctx.stores.simSelectedPixel.set(null);
         ctx.stores.simThreshold.set(0.5);
@@ -31,10 +31,7 @@ export const classifyWithOsm: TutorialDef = {
         ctx.stores.classes.set([]);
         ctx.stores.labels.set([]);
         ctx.stores.isClassified.set(false);
-        // Clear classification overlays on the map
-        if (ctx.zarrSource) {
-          ctx.zarrSource.clearClassificationOverlays();
-        }
+        ctx.manager.clearClassificationOverlays();
         // Switch to classifier tab
         ctx.stores.activeTool.set('classifier');
         await new Promise((r) => setTimeout(r, 300));
@@ -117,7 +114,6 @@ export const classifyWithOsm: TutorialDef = {
       highlight: '[data-tutorial="label-panel"]',
       arrow: 'left',
       action: async (ctx) => {
-        if (!ctx.zarrSource) return;
         const allLabels = get(ctx.stores.labels);
         const allClasses = get(ctx.stores.classes);
         if (allLabels.length < 2 || allClasses.length < 2) return;
@@ -126,20 +122,24 @@ export const classifyWithOsm: TutorialDef = {
         const confidence = get(ctx.stores.confidenceThreshold);
         const opacity = get(ctx.stores.classificationOpacity);
 
-        ctx.zarrSource.clearClassificationOverlays();
-        if (!ctx.zarrSource.embeddingRegion) return;
+        ctx.manager.clearClassificationOverlays();
+        const regions = ctx.manager.getEmbeddingRegions();
+        if (regions.size === 0) return;
+        const [zoneId, region] = regions.entries().next().value;
+        const src = ctx.manager.getOpenSource(zoneId);
+        if (!src) return;
 
         await classifyTiles(
-          ctx.zarrSource.embeddingRegion,
+          region,
           allLabels,
           allClasses,
           k,
           confidence,
           undefined,
           (ci, cj, canvas, classMap, w, h) => {
-            ctx.zarrSource!.addClassificationOverlay(ci, cj, canvas);
-            ctx.zarrSource!.setClassificationOpacity(opacity);
-            ctx.zarrSource!.setClassificationMap(ci, cj, classMap, w, h);
+            src.addClassificationOverlay(ci, cj, canvas);
+            src.setClassificationOpacity(opacity);
+            src.setClassificationMap(ci, cj, classMap, w, h);
             ctx.stores.isClassified.set(true);
           },
         );

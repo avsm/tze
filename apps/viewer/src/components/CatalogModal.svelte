@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { loadCatalog, pointInBbox } from '../lib/stac';
   import {
-    catalogUrl, zones, activeZoneId, catalogStatus, catalogError, initManager,
+    catalogUrl, zones, catalogStatus, catalogError, initManager,
   } from '../stores/stac';
   import { mapInstance } from '../stores/map';
   import { status, globalPreviewUrl, globalPreviewBounds } from '../stores/zarr';
@@ -33,7 +33,6 @@
     $catalogStatus = 'loading';
     $catalogError = '';
     $zones = [];
-    $activeZoneId = null;
     $status = 'Loading catalog...';
 
     try {

@@ -45,26 +45,28 @@
     progressTotal = 0;
 
     try {
-      // Use first zone with embeddings (Phase 3 will iterate all zones)
       const regions = mgr.getEmbeddingRegions();
       if (regions.size === 0) return;
-      const [firstZoneId, firstRegion] = regions.entries().next().value;
-      const src = mgr.getOpenSource(firstZoneId);
-      if (!src) return;
-      const results = await runSolarSegmentation(
-        firstRegion,
-        src,
-        threshold,
-        (done, total) => {
-          progressDone = done;
-          progressTotal = total;
-        },
-      );
 
-      const features = results.flatMap(r => r.polygons);
-      resultCount = features.length;
+      const allFeatures: GeoJSON.Feature[] = [];
+      for (const [zoneId, region] of regions) {
+        const src = mgr.getOpenSource(zoneId);
+        if (!src) continue;
+        const results = await runSolarSegmentation(
+          region,
+          src,
+          threshold,
+          (done, total) => {
+            progressDone = done;
+            progressTotal = total;
+          },
+        );
+        allFeatures.push(...results.flatMap(r => r.polygons));
+      }
+
+      resultCount = allFeatures.length;
       hasProbs = true;
-      $segmentPolygons = { type: 'FeatureCollection', features };
+      $segmentPolygons = { type: 'FeatureCollection', features: allFeatures };
     } catch (err) {
       errorMsg = err instanceof Error ? err.message : String(err);
     } finally {

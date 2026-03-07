@@ -17,7 +17,6 @@ export const cambridgeSetupSteps: TutorialStep[] = [
     title: 'Loading Zone Data',
     description: 'Waiting for the zone metadata and tile grid to load...',
     action: async (ctx) => {
-      // If metadata is already loaded (e.g. from a previous tutorial), skip waiting
       if (get(ctx.stores.metadata)) return;
       await ctx.waitForEvent('metadata-loaded', 15000);
     },
@@ -41,13 +40,12 @@ export const cambridgeSetupSteps: TutorialStep[] = [
       'Tessera embeddings are stored as Zarr arrays on a remote server.\n' +
       'We are fetching one tile\'s worth of per-pixel embeddings to the browser right now — this streams the compressed chunks over the network and decodes them locally.',
     action: async (ctx) => {
-      if (!ctx.zarrSource) return;
-      const chunk = ctx.zarrSource.getChunkAtLngLat(0.1218, 52.22);
+      const chunk = ctx.manager.getChunkAtLngLat(0.1218, 52.22);
       if (!chunk) return;
-      // If this chunk's embeddings are already loaded, skip
-      if (ctx.zarrSource.regionHasTile(chunk.ci, chunk.cj)) return;
+      if (ctx.manager.regionHasTile(chunk.zoneId, chunk.ci, chunk.cj)) return;
+      const src = await ctx.manager.getSource(chunk.zoneId);
       const loaded = ctx.waitForEvent('embeddings-loaded', 30000);
-      await ctx.zarrSource.loadFullChunk(chunk.ci, chunk.cj);
+      await src.loadFullChunk(chunk.ci, chunk.cj);
       await loaded;
     },
     trigger: { kind: 'action-complete' },

@@ -23,7 +23,7 @@ export const segmentationTutorial: TutorialDef = {
       description: 'Clearing previous state...',
       action: async (ctx) => {
         // Clear similarity state
-        ctx.stores.simScores.set([]);
+        ctx.stores.simScores.set(new Map());
         ctx.stores.simRefEmbedding.set(null);
         ctx.stores.simSelectedPixel.set(null);
         ctx.stores.simThreshold.set(0.5);
@@ -31,9 +31,7 @@ export const segmentationTutorial: TutorialDef = {
         ctx.stores.classes.set([]);
         ctx.stores.labels.set([]);
         ctx.stores.isClassified.set(false);
-        if (ctx.zarrSource) {
-          ctx.zarrSource.clearClassificationOverlays();
-        }
+        ctx.manager.clearClassificationOverlays();
         // Clear previous segmentation state
         clearSegmentation();
         segmentPolygons.set({ type: 'FeatureCollection', features: [] });
@@ -87,12 +85,12 @@ export const segmentationTutorial: TutorialDef = {
         'Downloading the per-pixel embeddings for this tile.\n' +
         'Each pixel has a 128-dimensional embedding vector — the model uses these as input features instead of raw spectral bands.',
       action: async (ctx) => {
-        if (!ctx.zarrSource) return;
-        const chunk = ctx.zarrSource.getChunkAtLngLat(0.30, 52.27);
+        const chunk = ctx.manager.getChunkAtLngLat(0.30, 52.27);
         if (!chunk) return;
-        if (ctx.zarrSource.regionHasTile(chunk.ci, chunk.cj)) return;
+        if (ctx.manager.regionHasTile(chunk.zoneId, chunk.ci, chunk.cj)) return;
+        const src = await ctx.manager.getSource(chunk.zoneId);
         const loaded = ctx.waitForEvent('embeddings-loaded', 30000);
-        await ctx.zarrSource.loadFullChunk(chunk.ci, chunk.cj);
+        await src.loadFullChunk(chunk.ci, chunk.cj);
         await loaded;
       },
       trigger: { kind: 'action-complete' },
@@ -149,10 +147,7 @@ export const segmentationTutorial: TutorialDef = {
         'Reducing the embedding overlay so the satellite imagery is clearer.\n' +
         'The orange polygons are pulsing to show the detected solar panel installations.',
       action: async (ctx) => {
-        // Fade down embedding tile opacity so satellite basemap shows through
-        if (ctx.zarrSource) {
-          ctx.zarrSource.setOpacity(0.15);
-        }
+        ctx.manager.setOpacity(0.15);
 
         // Pulse the segment polygon layers 3 times
         const map = ctx.map;

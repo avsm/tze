@@ -53,29 +53,28 @@
 
     try {
       mgr.clearClassificationOverlays();
-      // Use first zone with embeddings for now (Phase 3 will iterate all zones)
       const regions = mgr.getEmbeddingRegions();
       if (regions.size === 0) return;
-      const [firstZoneId, firstRegion] = regions.entries().next().value;
-      const source = mgr.getOpenSource(firstZoneId);
-      if (!source) return;
       const opacity = $classificationOpacity;
-      const results = await classifyTiles(
-        firstRegion,
-        allLabels,
-        allClasses,
-        $kValue,
-        $confidenceThreshold,
-        (p) => { classifyProgress = p; },
-        (ci, cj, canvas, classMap, w, h) => {
-          source.addClassificationOverlay(ci, cj, canvas);
-          source.setClassificationOpacity(opacity);
-          source.setClassificationMap(ci, cj, classMap, w, h);
-          $isClassified = true;
-        },
-      );
 
-      void results; // class maps already stored incrementally above
+      for (const [zoneId, region] of regions) {
+        const source = mgr.getOpenSource(zoneId);
+        if (!source) continue;
+        await classifyTiles(
+          region,
+          allLabels,
+          allClasses,
+          $kValue,
+          $confidenceThreshold,
+          (p) => { classifyProgress = p; },
+          (ci, cj, canvas, classMap, w, h) => {
+            source.addClassificationOverlay(ci, cj, canvas);
+            source.setClassificationOpacity(opacity);
+            source.setClassificationMap(ci, cj, classMap, w, h);
+            $isClassified = true;
+          },
+        );
+      }
     } finally {
       isClassifying = false;
       classifyProgress = null;

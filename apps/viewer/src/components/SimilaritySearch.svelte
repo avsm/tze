@@ -7,7 +7,7 @@
 
   let isComputing = $state(false);
   let pendingRecompute = false;
-  let overlayCanvas: HTMLCanvasElement | undefined;
+  let overlayCanvases = new Map<string, HTMLCanvasElement>();
 
   // Track embedding loads via events
   $effect(() => {
@@ -35,7 +35,7 @@
 
   /** Re-render similarity overlays from existing scores (e.g. when switching back to this tab). */
   export function restoreOverlays() {
-    if (get(simScores)) applyThreshold();
+    if (get(simScores).size > 0) applyThreshold();
   }
 
   /** Called from App.svelte when the user clicks in similarity mode. */
@@ -50,9 +50,7 @@
     runCompute();
   }
 
-  /** CPU compute — runs once per reference pixel selection.
-   *  For now uses the first zone's embedding region (single-zone path).
-   *  Phase 3 will iterate all zones. */
+  /** CPU compute — runs once per reference pixel selection, across all zones. */
   function runCompute() {
     const mgr = $sourceManager;
     if (!mgr || !$simRefEmbedding) return;
@@ -61,13 +59,16 @@
 
     try {
       mgr.clearSimilarityOverlay();
-      // Use first zone with embeddings for now
       const regions = mgr.getEmbeddingRegions();
       if (regions.size === 0) return;
-      const [firstZoneId, firstRegion] = regions.entries().next().value;
-      $simScores = computeSimilarityScores(firstRegion, $simRefEmbedding);
-      overlayCanvas = undefined; // force new canvas for new region geometry
-      applyThreshold(firstZoneId);
+
+      const results = new Map<string, ReturnType<typeof computeSimilarityScores>>();
+      for (const [zoneId, region] of regions) {
+        results.set(zoneId, computeSimilarityScores(region, $simRefEmbedding!));
+      }
+      $simScores = results;
+      overlayCanvases = new Map();
+      applyThreshold();
     } finally {
       isComputing = false;
       if (pendingRecompute) {
@@ -77,19 +78,19 @@
     }
   }
 
-  /** Render threshold into a single region-wide canvas and push to map. */
-  function applyThreshold(zoneId?: string) {
+  /** Render threshold into per-zone canvases and push to map. */
+  function applyThreshold() {
     const mgr = $sourceManager;
-    const result = $simScores;
+    const results = get(simScores);
     const threshold = $simThreshold;
-    if (!mgr || !result) return;
+    if (!mgr || results.size === 0) return;
 
-    overlayCanvas = renderSimilarityCanvas(result, threshold, overlayCanvas);
-    // Route overlay to the correct zone's source
-    const resolvedZoneId = zoneId ?? mgr.getEmbeddingRegions().keys().next().value;
-    if (resolvedZoneId) {
-      const src = mgr.getOpenSource(resolvedZoneId);
-      src?.setSimilarityOverlay(overlayCanvas);
+    for (const [zoneId, result] of results) {
+      let canvas = overlayCanvases.get(zoneId);
+      canvas = renderSimilarityCanvas(result, threshold, canvas);
+      overlayCanvases.set(zoneId, canvas);
+      const src = mgr.getOpenSource(zoneId);
+      src?.setSimilarityOverlay(canvas);
     }
   }
 
@@ -97,15 +98,14 @@
     $sourceManager?.clearSimilarityOverlay();
     $simSelectedPixel = null;
     $simRefEmbedding = null;
-    $simScores = null;
-    overlayCanvas = undefined;
+    $simScores = new Map();
+    overlayCanvases = new Map();
   }
 
   // React to threshold changes from any source (sidebar slider or UMAP window slider)
   $effect(() => {
     const _t = $simThreshold; // track only threshold
-    // Use get() to avoid tracking simScores in this effect
-    if (get(simScores)) applyThreshold();
+    if (get(simScores).size > 0) applyThreshold();
   });
 
 </script>

@@ -1798,6 +1798,14 @@ export class ZarrTesseraSource {
     const sourceId = 'zarr-global-preview-src';
     const layerId = 'zarr-global-preview-lyr';
 
+    // If the shared preview layer already exists (added by another zone source),
+    // just take ownership so updateVisibleChunks() gates correctly.
+    if (this.map.getLayer(layerId)) {
+      this.previewSourceId = sourceId;
+      this.previewLayerId = layerId;
+      return;
+    }
+
     try {
       this.map.addSource(sourceId, {
         type: 'raster',

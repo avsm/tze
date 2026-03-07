@@ -112,12 +112,8 @@
     const mgr = $sourceManager;
     if (!mgr) return;
 
-    // Use first zone with embeddings for OSM sampling
     const regions = mgr.getEmbeddingRegions();
     if (regions.size === 0) return;
-    const [firstZoneId] = regions.entries().next().value;
-    const src = mgr.getOpenSource(firstZoneId);
-    if (!src) return;
 
     const chosen = categories.filter(c => selected.has(c.tag));
     if (chosen.length === 0) return;
@@ -126,9 +122,20 @@
     sampleProgress = null;
 
     try {
-      const sampled = await sampleOsmCategories(src, chosen, (p) => {
-        sampleProgress = p;
-      });
+      // Sample from all zones and merge
+      const sampled = new Map<string, Array<{ lngLat: [number, number]; embeddingAt: import('@ucam-eo/maplibre-zarr-tessera').EmbeddingAt }>>();
+      for (const [zoneId] of regions) {
+        const src = mgr.getOpenSource(zoneId);
+        if (!src) continue;
+        const zoneSampled = await sampleOsmCategories(src, chosen, (p) => {
+          sampleProgress = p;
+        });
+        for (const [tag, samples] of zoneSampled) {
+          const existing = sampled.get(tag) ?? [];
+          existing.push(...samples);
+          sampled.set(tag, existing);
+        }
+      }
 
       // Build class definitions and label map for import
       const newClasses = chosen

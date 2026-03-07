@@ -9,18 +9,19 @@ export interface SubsampleResult {
   nBands: number;
 }
 
-const MAX_POINTS = 5000;
+const DEFAULT_MAX_POINTS = 5000;
 const NUM_BINS = 10;
 
 /**
  * Stratified subsample of embeddings, weighted by similarity score bins.
- * Always includes the reference pixel.
+ * Always includes the reference pixel if found in this region.
  */
 export function subsampleEmbeddings(
   region: EmbeddingRegion,
   simResult: SimilarityResult,
   refEmbedding: Float32Array,
   refPixel: { ci: number; cj: number; row: number; col: number },
+  maxPoints = DEFAULT_MAX_POINTS,
 ): SubsampleResult {
   interface PointRef {
     tileIdx: number;
@@ -64,7 +65,7 @@ export function subsampleEmbeddings(
     }
   }
 
-  const budget = MAX_POINTS - 1;
+  const budget = maxPoints - 1;
   const totalAvailable = bins.reduce((s, b) => s + b.length, 0);
   const sampleCount = Math.min(budget, totalAvailable);
   const selected: PointRef[] = [];
@@ -115,12 +116,8 @@ export function subsampleEmbeddings(
     embeddings.set(region.emb.subarray(offset, offset + nBands), refIndex * nBands);
     outScores[refIndex] = refPoint.score;
   } else {
-    refIndex = selected.length > 0 ? N - 1 : 0;
-    if (selected.length === 0) {
-      const e = new Float32Array(nBands);
-      e.set(refEmbedding);
-      return { embeddings: e, scores: new Float32Array([1.0]), refIndex: 0, count: 1, nBands };
-    }
+    // Ref pixel not in this region — leave refIndex = -1
+    refIndex = -1;
   }
 
   return { embeddings, scores: outScores, refIndex, count: N, nBands };
@@ -131,6 +128,7 @@ export function subsampleEmbeddings(
  */
 export function subsampleUniform(
   region: EmbeddingRegion,
+  maxPoints = DEFAULT_MAX_POINTS,
 ): SubsampleResult {
   interface PointRef { tileIdx: number; pixelIdx: number; }
   const all: PointRef[] = [];
@@ -151,7 +149,7 @@ export function subsampleUniform(
     return { embeddings: new Float32Array(0), scores: new Float32Array(0), refIndex: -1, count: 0, nBands: nBands || 128 };
   }
 
-  const n = Math.min(MAX_POINTS, all.length);
+  const n = Math.min(maxPoints, all.length);
   for (let i = all.length - 1; i >= all.length - n; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [all[i], all[j]] = [all[j], all[i]];

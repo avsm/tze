@@ -207,12 +207,12 @@ export const understandingEmbeddings: TutorialDef = {
         'The result is a 128-dimensional int8 vector per 10m\u00b2 pixel, available globally as downloadable Zarr arrays.',
       diagram: TESSERA_DIAGRAM_OBJ,
       action: async (ctx) => {
-        if (!ctx.zarrSource) return;
-        const chunk = ctx.zarrSource.getChunkAtLngLat(0.1218, 52.22);
+        const chunk = ctx.manager.getChunkAtLngLat(0.1218, 52.22);
         if (!chunk) return;
-        if (ctx.zarrSource.regionHasTile(chunk.ci, chunk.cj)) return;
+        if (ctx.manager.regionHasTile(chunk.zoneId, chunk.ci, chunk.cj)) return;
+        const src = await ctx.manager.getSource(chunk.zoneId);
         const loaded = ctx.waitForEvent('embeddings-loaded', 30000);
-        await ctx.zarrSource.loadFullChunk(chunk.ci, chunk.cj);
+        await src.loadFullChunk(chunk.ci, chunk.cj);
         await loaded;
       },
       trigger: { kind: 'action-complete' },

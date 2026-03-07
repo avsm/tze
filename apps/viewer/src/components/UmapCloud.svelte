@@ -85,28 +85,91 @@
     if (worker) { worker.terminate(); worker = null; }
   }
 
+  const MAX_UMAP_POINTS = 5000;
+
   async function runUmap() {
     const mgr = $sourceManager;
     if (!mgr || mgr.totalTileCount() === 0) return;
-    // Use first zone with embeddings
     const regions = mgr.getEmbeddingRegions();
     if (regions.size === 0) return;
-    const [_firstZoneId, firstRegion] = regions.entries().next().value;
 
     killWorker();
     status = 'Sampling...';
 
-    const simResult = $simScores;
+    const simResults = $simScores;
     const ref = $simRefEmbedding;
     const pixel = $simSelectedPixel;
 
-    const region = firstRegion;
-    const sample = (simResult && ref && pixel)
-      ? subsampleEmbeddings(region, simResult, ref, pixel)
-      : subsampleUniform(region);
+    // Count loaded tiles across all zones for proportional budgeting
+    let totalLoadedTiles = 0;
+    const zoneTileCounts = new Map<string, number>();
+    for (const [zoneId, region] of regions) {
+      let n = 0;
+      for (let i = 0; i < region.loaded.length; i++) if (region.loaded[i]) n++;
+      zoneTileCounts.set(zoneId, n);
+      totalLoadedTiles += n;
+    }
 
-    if (sample.count < 4) { status = 'Too few points'; return; }
+    // Subsample from each zone proportionally
+    const allEmbeddings: Float32Array[] = [];
+    const allScores: Float32Array[] = [];
+    let totalCount = 0;
+    let refIndex = -1;
+    let nBands = 0;
 
+    for (const [zoneId, region] of regions) {
+      const zoneTiles = zoneTileCounts.get(zoneId) ?? 0;
+      if (zoneTiles === 0) continue;
+      const budget = Math.max(10, Math.round((zoneTiles / totalLoadedTiles) * MAX_UMAP_POINTS));
+
+      const simResult = simResults.get(zoneId);
+      const sample = (simResult && ref && pixel)
+        ? subsampleEmbeddings(region, simResult, ref, pixel, budget)
+        : subsampleUniform(region, budget);
+
+      if (sample.count === 0) continue;
+      if (sample.refIndex >= 0) refIndex = totalCount + sample.refIndex;
+
+      allEmbeddings.push(sample.embeddings);
+      allScores.push(sample.scores);
+      totalCount += sample.count;
+      nBands = sample.nBands;
+    }
+
+    if (totalCount < 4) { status = 'Too few points'; return; }
+
+    // Merge all zones into single buffers
+    const embeddings = new Float32Array(totalCount * nBands);
+    const scores = new Float32Array(totalCount);
+    let offset = 0;
+    for (let i = 0; i < allEmbeddings.length; i++) {
+      const count = allScores[i].length;
+      embeddings.set(allEmbeddings[i], offset * nBands);
+      scores.set(allScores[i], offset);
+      offset += count;
+    }
+
+    // If ref pixel was in no zone's subsample, inject it manually
+    if (refIndex < 0 && ref) {
+      const withRef = new Float32Array(embeddings.length + nBands);
+      withRef.set(embeddings);
+      withRef.set(ref, embeddings.length);
+      const withScores = new Float32Array(scores.length + 1);
+      withScores.set(scores);
+      withScores[scores.length] = 1.0;
+      refIndex = totalCount;
+      totalCount++;
+      // Use the extended buffers
+      const sample = { embeddings: withRef, scores: withScores, refIndex, count: totalCount, nBands };
+      launchUmapWorker(sample);
+      return;
+    }
+
+    const sample = { embeddings, scores, refIndex, count: totalCount, nBands };
+    launchUmapWorker(sample);
+  }
+
+  function launchUmapWorker(sample: { embeddings: Float32Array; scores: Float32Array; refIndex: number; count: number; nBands: number }) {
     status = `UMAP ${sample.count} pts...`;
 
     const w = new Worker(new URL('../lib/umap-worker.ts', import.meta.url), { type: 'module' });

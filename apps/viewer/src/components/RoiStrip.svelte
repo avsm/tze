@@ -202,7 +202,7 @@
       </div>
       <div class="w-full h-1 bg-gray-800 rounded-full overflow-hidden">
         <div
-          class="h-full bg-term-cyan/70 rounded-full transition-all duration-300"
+          class="h-full bg-term-cyan/70 rounded-full"
           style="width: {($roiLoading.loaded / $roiLoading.total) * 100}%"
         ></div>
       </div>

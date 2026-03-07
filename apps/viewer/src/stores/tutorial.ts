@@ -39,7 +39,7 @@ export function startTutorial(id: string) {
   if (mgr) mgr.clearClassificationOverlays();
   simSelectedPixel.set(null);
   simRefEmbedding.set(null);
-  simScores.set([]);
+  simScores.set(new Map());
   simThreshold.set(0.5);
   classes.set([]);
   labels.set([]);

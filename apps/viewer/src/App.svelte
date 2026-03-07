@@ -18,7 +18,7 @@
   import { get } from 'svelte/store';
   import { activeClass, classes, labels, addLabel, isClassified } from './stores/classifier';
   import { activeTool } from './stores/tools';
-  import { zones, activeZoneId, switchZone } from './stores/stac';
+  import { zones } from './stores/stac';
   import { pointInBbox } from './lib/stac';
   import { segmentPolygons, segmentVisible } from './stores/segmentation';
   import UmapCloud from './components/UmapCloud.svelte';
@@ -62,7 +62,7 @@
     satellite: { tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], attribution: 'Esri, Maxar' },
   };
 
-  function switchBasemap(id: 'osm' | 'satellite' | 'dark') { // kept for tutorial compatibility
+  function switchBasemap(id: 'osm' | 'satellite' | 'dark') {
     const map = $mapInstance;
     if (!map) return;
     const bm = BASEMAP_TILES[id];
@@ -367,16 +367,16 @@
       }
     });
 
-    // Auto-switch zone on pan
+    // Lazily open zone sources as the user pans into new zones
     map.on('moveend', () => {
+      const mgr = get(sourceManager);
+      if (!mgr) return;
       const center = map.getCenter();
       const currentZones = get(zones);
-      if (currentZones.length === 0) return;
-
       for (const zone of currentZones) {
         if (pointInBbox(center.lng, center.lat, zone.bbox)) {
-          if (zone.id !== get(activeZoneId)) {
-            switchZone(zone.id);
+          if (!mgr.getOpenSource(zone.id)) {
+            mgr.getSource(zone.id);
           }
           break;
         }

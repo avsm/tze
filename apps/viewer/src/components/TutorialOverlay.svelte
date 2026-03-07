@@ -86,21 +86,16 @@
   /** Build context object for tutorial step actions. */
   function buildContext(): TutorialContext | null {
     const map = get(mapInstance);
-    if (!map) return null;
+    const mgr = get(sourceManager);
+    if (!map || !mgr) return null;
 
     return {
       map,
-      zarrSource: (() => {
-        // Tutorials operate single-zone — give them the first open source
-        const mgr = get(sourceManager);
-        if (!mgr) return null;
-        const sources = mgr.getActiveSources();
-        return sources.size > 0 ? sources.values().next().value : null;
-      })(),
+      manager: mgr,
       stores: {
         activeTool,
         simThreshold,
-        zarrSource: sourceManager as any, // tutorials use store.subscribe but call mgr methods
+        sourceManager,
         metadata,
         simScores,
         simRefEmbedding,
@@ -125,8 +120,6 @@
       },
       waitForEvent(event: string, timeout = 30000) {
         return new Promise<void>((resolve) => {
-          const mgr = get(sourceManager);
-          if (!mgr) { resolve(); return; }
           const timer = setTimeout(() => {
             mgr.off(event, handler);
             resolve();

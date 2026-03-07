@@ -76,8 +76,6 @@ export class ZarrSourceManager {
   /** Attach to map. Does NOT open any zone sources yet — they open on demand. */
   async addTo(map: MaplibreMap): Promise<void> {
     this.map = map;
-    // The global preview layer is added by the first zone source that has
-    // globalPreviewUrl configured (it's shared across zones).
   }
 
   /** Remove all sources and clean up. */
@@ -135,13 +133,9 @@ export class ZarrSourceManager {
     if (!zone) throw new Error(`Unknown zone: ${zoneId}`);
     if (!this.map) throw new Error('Manager not attached to map');
 
-    // Only the first source gets the global preview layer
-    const isFirst = this.sources.size === 0;
     const src = new ZarrTesseraSource({
       ...this.baseOpts,
       url: zone.zarrUrl,
-      // Only first source adds the global preview (avoids duplicate layers)
-      globalPreviewUrl: isFirst ? this.baseOpts.globalPreviewUrl : undefined,
     });
 
     // Forward events from per-zone sources to manager listeners
