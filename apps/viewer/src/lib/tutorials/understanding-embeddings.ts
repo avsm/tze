@@ -257,7 +257,9 @@ export const understandingEmbeddings: TutorialDef = {
       action: async (ctx) => {
         ctx.stores.activeTool.set('similarity');
         await new Promise((r) => setTimeout(r, 500));
-        ctx.similarityClick(0.1218, 52.22);
+        // Click the center of the current view (which was fitBounds'd to the loaded region)
+        const c = ctx.map.getCenter();
+        ctx.similarityClick(c.lng, c.lat);
         await new Promise((r) => setTimeout(r, 1500));
       },
       trigger: { kind: 'action-complete' },
