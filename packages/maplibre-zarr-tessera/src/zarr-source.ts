@@ -374,7 +374,8 @@ export class ZarrTesseraSource {
       return inside;
     };
 
-    // Convert UTM bounds to chunk index ranges (same math as visibleChunkIndices)
+    // Convert UTM bounds to chunk index ranges with a one-tile buffer
+    // so any tile intersected by the polygon edge is included
     const cs = this.store.meta.chunkShape;
     const s = this.store.meta.shape;
     const t = this.store.meta.transform;
@@ -384,10 +385,10 @@ export class ZarrTesseraSource {
     const nChunksRow = Math.ceil(s[0] / cs[0]);
     const nChunksCol = Math.ceil(s[1] / cs[1]);
 
-    const cjMin = Math.max(0, Math.floor((minE - originE) / (cs[1] * px)));
-    const cjMax = Math.min(nChunksCol - 1, Math.floor((maxE - originE) / (cs[1] * px)));
-    const ciMin = Math.max(0, Math.floor((originN - maxN) / (cs[0] * px)));
-    const ciMax = Math.min(nChunksRow - 1, Math.floor((originN - minN) / (cs[0] * px)));
+    const cjMin = Math.max(0, Math.floor((minE - originE) / (cs[1] * px)) - 1);
+    const cjMax = Math.min(nChunksCol - 1, Math.floor((maxE - originE) / (cs[1] * px)) + 1);
+    const ciMin = Math.max(0, Math.floor((originN - maxN) / (cs[0] * px)) - 1);
+    const ciMax = Math.min(nChunksRow - 1, Math.floor((originN - minN) / (cs[0] * px)) + 1);
 
     const chunkW = cs[1] * px;
     const chunkH = cs[0] * px;
@@ -794,6 +795,21 @@ export class ZarrTesseraSource {
       }
     }
     return results;
+  }
+
+  /** Return the [TL, TR, BR, BL] lng/lat corners of a single embedding pixel. */
+  getPixelBoundsLngLat(ci: number, cj: number, row: number, col: number): [[number, number], [number, number], [number, number], [number, number]] | null {
+    if (!this.store || !this.proj) return null;
+    const t = this.store.meta.transform;
+    const px = t[0], originE = t[2], originN = t[5];
+    const cs = this.store.meta.chunkShape;
+    const globalRow = ci * cs[0] + row;
+    const globalCol = cj * cs[1] + col;
+    const minE = originE + globalCol * px;
+    const maxE = minE + px;
+    const maxN = originN - globalRow * px;
+    const minN = maxN - px;
+    return this.proj.chunkCornersToLngLat({ minE, maxE, minN, maxN });
   }
 
   /** Compute the bounding box (in WGS84) of all loaded embedding tiles. */
@@ -1508,6 +1524,9 @@ export class ZarrTesseraSource {
     // Similarity overlay (single region-wide layer)
     if (this.map!.getLayer('zarr-sim-overlay-lyr')) this.map!.moveLayer('zarr-sim-overlay-lyr');
     for (const id of classLayers) this.map!.moveLayer(id);
+    // Label pixel polygons (training labels for classifier)
+    if (this.map!.getLayer('label-pixels-fill')) this.map!.moveLayer('label-pixels-fill');
+    if (this.map!.getLayer('label-pixels-line')) this.map!.moveLayer('label-pixels-line');
     // ROI polygon outlines should be above classification overlays
     if (this.map!.getLayer('roi-regions-fill')) this.map!.moveLayer('roi-regions-fill');
     if (this.map!.getLayer('roi-regions-line')) this.map!.moveLayer('roi-regions-line');

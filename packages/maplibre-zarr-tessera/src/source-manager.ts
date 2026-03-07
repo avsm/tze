@@ -200,6 +200,17 @@ export class ZarrSourceManager {
     return [];
   }
 
+  /** Return the [TL, TR, BR, BL] lng/lat corners of a single embedding pixel.
+   *  Searches all open zone sources for the matching chunk. */
+  getPixelBoundsLngLat(ci: number, cj: number, row: number, col: number): [[number, number], [number, number], [number, number], [number, number]] | null {
+    for (const src of this.sources.values()) {
+      if (src.regionHasTile(ci, cj)) {
+        return src.getPixelBoundsLngLat(ci, cj, row, col);
+      }
+    }
+    return null;
+  }
+
   /** Get chunk indices at a map coordinate, routing to the correct zone. */
   getChunkAtLngLat(lng: number, lat: number): (ManagedChunk) | null {
     const zones = this.zonesAtPoint(lng, lat);

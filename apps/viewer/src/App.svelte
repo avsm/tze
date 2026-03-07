@@ -16,7 +16,7 @@
   import type SimilaritySearch from './components/SimilaritySearch.svelte';
   import { sourceManager } from './stores/zarr';
   import { get } from 'svelte/store';
-  import { activeClass, classes, labels, addLabel, isClassified } from './stores/classifier';
+  import { activeClass, classes, labels, addLabel, removeLabel, isClassified } from './stores/classifier';
   import { activeTool } from './stores/tools';
   import { zones } from './stores/stac';
   import { pointInBbox } from './lib/stac';
@@ -30,29 +30,8 @@
   import { drawMode, roiDrawing, roiRegions, addRegion } from './stores/drawing';
 
   let mapContainer: HTMLDivElement;
-  let labelMarkers: maplibregl.Marker[] = [];
   let similarityRef: SimilaritySearch | undefined = $state();
   let terraDraw: TerraDraw | undefined = $state();
-
-  function createMarkerElement(color: string, source: 'human' | 'osm'): HTMLElement {
-    const el = document.createElement('div');
-    if (source === 'osm') {
-      // Small dot with "osm" text for OSM-sourced labels
-      el.style.cssText = `
-        width: 10px; height: 10px; border-radius: 50%;
-        background: ${color}; border: 1.5px solid rgba(255,255,255,0.6);
-        box-shadow: 0 0 4px ${color}80;
-      `;
-    } else {
-      // Larger dot for human labels
-      el.style.cssText = `
-        width: 16px; height: 16px; border-radius: 50%;
-        background: ${color}; border: 2px solid rgba(255,255,255,0.8);
-        box-shadow: 0 0 6px ${color}aa;
-      `;
-    }
-    return el;
-  }
   let catalogModalOpen = $state(true);
   let osmModalOpen = $state(false);
   let osmAutoImport = $state(false);
@@ -150,6 +129,31 @@
         type: 'line',
         source: 'segment-polygons',
         paint: { 'line-color': '#f97316', 'line-width': 1.5, 'line-opacity': 0.8 },
+      });
+
+      // Label pixel polygons (classification training labels)
+      map.addSource('label-pixels', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+      map.addLayer({
+        id: 'label-pixels-fill',
+        type: 'fill',
+        source: 'label-pixels',
+        paint: {
+          'fill-color': ['get', 'color'],
+          'fill-opacity': 0.7,
+        },
+      });
+      map.addLayer({
+        id: 'label-pixels-line',
+        type: 'line',
+        source: 'label-pixels',
+        paint: {
+          'line-color': '#ffffff',
+          'line-width': 1,
+          'line-opacity': 0.8,
+        },
       });
 
       // ROI region outlines
@@ -294,32 +298,24 @@
         return;
       }
 
-      // Check label proximity (screen-space, 12px threshold)
+      // Check if cursor is on a label pixel
       const allLabels = get(labels);
-      if (allLabels.length > 0) {
-        const allClasses = get(classes);
-        const classLookup = new Map(allClasses.map(c => [c.id, c]));
-        const mousePoint = map.project(e.lngLat);
-        let nearest: { dist: number; label: typeof allLabels[0] } | null = null;
-        for (const lp of allLabels) {
-          const pt = map.project(lp.lngLat);
-          const dx = pt.x - mousePoint.x;
-          const dy = pt.y - mousePoint.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < 12 && (!nearest || dist < nearest.dist)) {
-            nearest = { dist, label: lp };
+      if (allLabels.length > 0 && mgr) {
+        const emb = mgr.getEmbeddingAt(e.lngLat.lng, e.lngLat.lat);
+        if (emb) {
+          const lp = allLabels.find(l => l.ci === emb.ci && l.cj === emb.cj && l.row === emb.row && l.col === emb.col);
+          if (lp) {
+            const allClasses = get(classes);
+            const cls = allClasses.find(c => c.id === lp.classId);
+            const srcTag = lp.source === 'osm'
+              ? ' <span class="text-gray-500">osm</span>'
+              : ' <span class="text-gray-500">manual</span>';
+            tip.innerHTML = `<span style="background:${cls?.color ?? '#888'}" class="inline-block w-2 h-2 rounded-sm"></span> ${cls?.name ?? '?'}${srcTag}`;
+            tip.style.left = `${tipX}px`;
+            tip.style.top = `${tipY}px`;
+            tip.style.display = 'flex';
+            return;
           }
-        }
-        if (nearest) {
-          const cls = classLookup.get(nearest.label.classId);
-          const srcTag = nearest.label.source === 'osm'
-            ? ' <span class="text-gray-500">osm</span>'
-            : ' <span class="text-gray-500">manual</span>';
-          tip.innerHTML = `<span style="background:${cls?.color ?? '#888'}" class="inline-block w-2 h-2 rounded-sm"></span> ${cls?.name ?? '?'}${srcTag}`;
-          tip.style.left = `${tipX}px`;
-          tip.style.top = `${tipY}px`;
-          tip.style.display = 'flex';
-          return;
         }
       }
 
@@ -355,6 +351,14 @@
       }
 
       if (tool === 'classifier') {
+        // Check if there's already a label at this pixel — if so, remove it
+        const emb0 = mgr.getEmbeddingAt(e.lngLat.lng, e.lngLat.lat);
+        if (emb0) {
+          const removed = removeLabel(emb0.ci, emb0.cj, emb0.row, emb0.col);
+          if (removed) return;
+        }
+
+        // No existing label — add one (requires active class)
         const cls = get(activeClass);
         if (!cls) return;
 
@@ -434,34 +438,44 @@
 
   // Zone polygon layers removed — UTM zones are now an implementation detail
 
-  // Sync label markers reactively — only visible on classifier tab
+  // Sync label pixel polygons reactively — only visible on classifier tab
   $effect(() => {
     const map = $mapInstance;
     const allLabels = $labels;
     const allClasses = $classes;
     const tool = $activeTool;
+    const mgr = $sourceManager;
     if (!map) return;
 
-    // Remove old markers
-    for (const m of labelMarkers) m.remove();
-    labelMarkers = [];
+    const src = map.getSource('label-pixels') as maplibregl.GeoJSONSource | undefined;
+    if (!src) return;
 
-    // Only show markers when on the classifier tab
-    if (tool !== 'classifier') return;
+    // Only show labels on the classifier tab
+    if (tool !== 'classifier' || !mgr) {
+      src.setData({ type: 'FeatureCollection', features: [] });
+      return;
+    }
 
     // Build classId → color lookup
     const colorMap = new Map<number, string>();
     for (const cls of allClasses) colorMap.set(cls.id, cls.color);
 
-    // Create markers for all labels
+    // Build polygon features for each label — one pixel-sized square per label
+    const features: GeoJSON.Feature[] = [];
     for (const lp of allLabels) {
-      const color = colorMap.get(lp.classId) ?? '#888';
-      const el = createMarkerElement(color, lp.source);
-      const marker = new maplibregl.Marker({ element: el })
-        .setLngLat(lp.lngLat)
-        .addTo(map);
-      labelMarkers.push(marker);
+      const corners = mgr.getPixelBoundsLngLat(lp.ci, lp.cj, lp.row, lp.col);
+      if (!corners) continue;
+      const color = colorMap.get(lp.classId) ?? '#888888';
+      features.push({
+        type: 'Feature',
+        properties: { color },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[corners[0], corners[1], corners[2], corners[3], corners[0]]],
+        },
+      });
     }
+    src.setData({ type: 'FeatureCollection', features });
   });
 
   // Update segmentation polygon layers when store changes

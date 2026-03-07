@@ -80,6 +80,15 @@ export function addLabel(
   }]);
 }
 
+/** Remove a label at a specific pixel location. Returns true if a label was removed. */
+export function removeLabel(ci: number, cj: number, row: number, col: number): boolean {
+  const current = get(labels);
+  const idx = current.findIndex(l => l.ci === ci && l.cj === cj && l.row === row && l.col === col);
+  if (idx < 0) return false;
+  labels.update(ls => ls.filter((_, i) => i !== idx));
+  return true;
+}
+
 export function clearLabels(): void {
   labels.set([]);
   isClassified.set(false);

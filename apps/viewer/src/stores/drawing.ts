@@ -69,7 +69,7 @@ export async function addRegion(feature: GeoJSON.Feature): Promise<void> {
   const total = managedChunks.length;
   roiLoading.set({ loaded: 0, total });
   let globalLoaded = 0;
-  let rafPending = false;
+  let rafId = 0;
 
   for (const [zoneId, chunks] of byZone) {
     const src = await manager.getSource(zoneId);
@@ -77,17 +77,20 @@ export async function addRegion(feature: GeoJSON.Feature): Promise<void> {
     await src.loadChunkBatch(chunks, (loaded, _t) => {
       globalLoaded = baseLoaded + loaded;
       src.updateRegionAnimation(loaded, chunks.length, chunks[Math.min(loaded - 1, chunks.length - 1)]?.ci, chunks[Math.min(loaded - 1, chunks.length - 1)]?.cj);
-      if (!rafPending) {
-        rafPending = true;
-        requestAnimationFrame(() => {
-          rafPending = false;
+      if (!rafId) {
+        rafId = requestAnimationFrame(() => {
+          rafId = 0;
           roiLoading.set({ loaded: globalLoaded, total });
         });
       }
     });
-    // Flush final count for this zone so the bar is accurate before next zone starts
+    // Cancel any pending rAF and flush final count before next zone
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
     roiLoading.set({ loaded: globalLoaded, total });
   }
+
+  // Cancel any trailing rAF so it doesn't overwrite the null below
+  if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
 
   // Stop all animations and re-render
   manager.stopRegionAnimation();
