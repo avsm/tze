@@ -1,5 +1,5 @@
 import type { EmbeddingRegion } from '@ucam-eo/maplibre-zarr-tessera';
-import type { SimilarityResult } from './similarity';
+import type { SimilarityResult } from '@ucam-eo/tessera-tasks';
 
 export interface SubsampleResult {
   embeddings: Float32Array; // N * nBands flat

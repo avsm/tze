@@ -1,5 +1,5 @@
 import { writable } from 'svelte/store';
-import type { SimilarityResult } from '../lib/similarity';
+import type { SimilarityResult } from '@ucam-eo/tessera-tasks';
 
 /** Per-zone similarity results. Empty map = no computation. */
 export const simScores = writable<Map<string, SimilarityResult>>(new Map());

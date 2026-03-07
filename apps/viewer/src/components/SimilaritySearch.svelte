@@ -3,7 +3,7 @@
   import { sourceManager } from '../stores/zarr';
   import { simScores, simRefEmbedding, simSelectedPixel, simThreshold, simEmbeddingTileCount } from '../stores/similarity';
   import { roiLoading } from '../stores/drawing';
-  import { computeSimilarityScores, renderSimilarityCanvas } from '../lib/similarity';
+  import { computeSimilarityScores, renderSimilarityCanvas } from '@ucam-eo/tessera-tasks';
 
   let isComputing = $state(false);
   let pendingRecompute = false;
