@@ -2,7 +2,9 @@
   import { onMount } from 'svelte';
   import { loadCatalog, pointInBbox } from '../lib/stac';
   import {
-    catalogUrl, zones, catalogStatus, catalogError, initManager,
+    catalogUrl, zones, allZones, availableYears, activeYear,
+    globalPreviewUrls as globalPreviewUrlsStore,
+    catalogStatus, catalogError, initManager,
   } from '../stores/stac';
   import { mapInstance } from '../stores/map';
   import { status, globalPreviewUrl, globalPreviewBounds } from '../stores/zarr';
@@ -30,18 +32,18 @@
   let managerInitStarted = $state(false);
   $effect(() => {
     const map = $mapInstance;
-    const allZones = $zones;
-    if (map && allZones.length > 0 && $catalogStatus === 'loaded' && !managerInitStarted) {
+    const currentZones = $zones;
+    if (map && currentZones.length > 0 && $catalogStatus === 'loaded' && !managerInitStarted) {
       managerInitStarted = true;
       const center = map.getCenter();
       let initialZoneId: string | undefined;
-      for (const zone of allZones) {
+      for (const zone of currentZones) {
         if (pointInBbox(center.lng, center.lat, zone.bbox)) {
           initialZoneId = zone.id;
           break;
         }
       }
-      initManager(initialZoneId ?? allZones[0].id);
+      initManager(initialZoneId ?? currentZones[0].id);
     }
   });
 
@@ -52,14 +54,22 @@
     $catalogUrl = url;
     $catalogStatus = 'loading';
     $catalogError = '';
-    $zones = [];
+    $allZones = [];
     managerInitStarted = false;
     $status = 'Loading catalog...';
 
     try {
       const result = await loadCatalog(url);
-      $zones = result.zones;
-      $globalPreviewUrl = result.globalPreviewUrl ?? '';
+      $allZones = result.zones;
+      $availableYears = result.availableYears;
+      $globalPreviewUrlsStore = result.globalPreviewUrls;
+
+      // Default to the latest year
+      const defaultYear = result.availableYears[result.availableYears.length - 1] ?? '';
+      $activeYear = defaultYear;
+
+      // Set preview URL for the default year
+      $globalPreviewUrl = result.globalPreviewUrls[defaultYear] ?? result.globalPreviewUrl ?? '';
       $globalPreviewBounds = result.globalBounds;
       $catalogStatus = 'loaded';
       console.log('[CatalogModal] Catalog loaded:', result.zones.length, 'zones, preview:', result.globalPreviewUrl);
@@ -128,7 +138,12 @@
           {:else if $catalogStatus === 'error'}
             <span class="text-red-400">{$catalogError}</span>
           {:else if $catalogStatus === 'loaded'}
-            <span class="text-green-400">{$zones.length} zones discovered</span>
+            <span class="text-green-400">
+              {$zones.length} zones discovered
+              {#if $availableYears.length > 1}
+                &middot; {$availableYears.length} years ({$availableYears.join(', ')})
+              {/if}
+            </span>
           {:else}
             <span class="text-gray-600">Enter a STAC catalog URL to connect</span>
           {/if}
