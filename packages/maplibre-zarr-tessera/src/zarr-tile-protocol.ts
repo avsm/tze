@@ -106,7 +106,7 @@ export function registerZarrProtocol(maplibregl: { addProtocol: (name: string, h
     const level = selectLevel(levels, z);
     const bounds = tileBounds(z, x, y);
 
-    // Map lat/lon bounds → pixel coordinates in this pyramid level
+    // Map lat/lon → pixel coordinates in this pyramid level (equirectangular)
     // Longitude: [-180, 180] → [0, shape[1]]
     // Latitude: [90, -90] → [0, shape[0]]  (north at row 0, descending)
     const lonToPx = (lon: number) => ((lon + 180) / 360) * level.shape[1];
@@ -140,18 +140,35 @@ export function registerZarrProtocol(maplibregl: { addProtocol: (name: string, h
     const srcW = c1 - c0;
     const nBands = level.shape[2]; // typically 4 (RGBA)
 
-    // Render to RGBA tile via canvas and encode as PNG
+    // Render to RGBA tile via canvas and encode as PNG.
+    // MapLibre tiles are in Web Mercator but our source data is equirectangular
+    // (plate carrée). For each output pixel we compute the actual latitude via
+    // the Mercator inverse, then look up the correct row in the source array.
+    // This prevents the "floating tiles" distortion visible at low zoom levels.
     const canvas = document.createElement('canvas');
     canvas.width = TILE_SIZE;
     canvas.height = TILE_SIZE;
     const ctx = canvas.getContext('2d')!;
     const imgData = ctx.createImageData(TILE_SIZE, TILE_SIZE);
     const out = imgData.data;
+    const nTiles = 1 << z;
 
     for (let ty = 0; ty < TILE_SIZE; ty++) {
-      const srcY = Math.min(srcH - 1, Math.floor((ty / TILE_SIZE) * srcH));
+      // Mercator Y → latitude for this pixel row
+      const mercY = y + (ty + 0.5) / TILE_SIZE;
+      const latRad = Math.PI - (2 * Math.PI * mercY) / nTiles;
+      const lat = (180 / Math.PI) * Math.atan(Math.sinh(latRad));
+      const srcRowF = latToPx(lat) - r0;
+      if (srcRowF < 0 || srcRowF >= srcH) continue;
+      const srcY = Math.min(srcH - 1, Math.floor(srcRowF));
+
       for (let tx = 0; tx < TILE_SIZE; tx++) {
-        const srcX = Math.min(srcW - 1, Math.floor((tx / TILE_SIZE) * srcW));
+        // Longitude is linear in both projections
+        const lon = bounds.west + (tx + 0.5) / TILE_SIZE * (bounds.east - bounds.west);
+        const srcColF = lonToPx(lon) - c0;
+        if (srcColF < 0 || srcColF >= srcW) continue;
+        const srcX = Math.min(srcW - 1, Math.floor(srcColF));
+
         const srcIdx = (srcY * srcW + srcX) * nBands;
         const dstIdx = (ty * TILE_SIZE + tx) * 4;
         out[dstIdx]     = src[srcIdx];         // R
