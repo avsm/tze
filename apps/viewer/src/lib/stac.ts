@@ -1,5 +1,3 @@
-import create from 'stac-js';
-
 export interface ZoneDescriptor {
   id: string;                // e.g. "utm30_2025"
   utmZone: number;           // e.g. 30
@@ -14,6 +12,24 @@ async function fetchJson(url: string, signal?: AbortSignal): Promise<unknown> {
   const resp = await fetch(url, { signal });
   if (!resp.ok) throw new Error(`Failed to fetch ${url}: ${resp.status}`);
   return resp.json();
+}
+
+/** Extract links with a given rel from a STAC object's links array. */
+function linksWithRel(data: StacObject, rel: string): StacLink[] {
+  return (data.links ?? []).filter((l) => l.rel === rel);
+}
+
+interface StacLink { rel: string; href: string; type?: string; title?: string }
+interface StacObject {
+  type?: string;
+  id?: string;
+  links?: StacLink[];
+  properties?: Record<string, unknown>;
+  assets?: Record<string, { href: string }>;
+  bbox?: [number, number, number, number];
+  geometry?: GeoJSON.Polygon;
+  title?: string;
+  [key: string]: unknown;
 }
 
 /**
@@ -38,28 +54,25 @@ export async function loadCatalog(catalogUrl: string, signal?: AbortSignal): Pro
   // and fetch() routes through the Vite/proxy server.
   const resolvedCatalogUrl = new URL(catalogUrl, window.location.href).href;
 
-  // 1. Fetch and parse the root catalog
-  const catalogData = await fetchJson(resolvedCatalogUrl, signal);
-  const catalog = create(catalogData as Record<string, unknown>);
+  // 1. Fetch the root catalog (plain JSON — no stac-js, which mangles STAC 1.1 links)
+  const catalog = await fetchJson(resolvedCatalogUrl, signal) as StacObject;
 
   // 2. Follow child links (rel=child → collections)
-  const childLinks = catalog.getChildLinks();
+  const childLinks = linksWithRel(catalog, 'child');
   for (const link of childLinks) {
     const collectionUrl = new URL(link.href, resolvedCatalogUrl).href;
-    const collectionData = await fetchJson(collectionUrl, signal);
-    const collection = create(collectionData as Record<string, unknown>);
+    const collection = await fetchJson(collectionUrl, signal) as StacObject;
 
     // 3. Follow item links (rel=item → items)
-    const itemLinks = collection.getItemLinks();
+    const itemLinks = linksWithRel(collection, 'item');
     for (const itemLink of itemLinks) {
       const itemUrl = new URL(itemLink.href, collectionUrl).href;
-      const itemData = await fetchJson(itemUrl, signal) as Record<string, unknown>;
-      const item = create(itemData);
+      const item = await fetchJson(itemUrl, signal) as StacObject;
 
       // 4. Extract zone info from item
-      const props = item.properties as Record<string, unknown>;
-      const assets = item.assets as Record<string, { href: string }>;
-      const zarrAsset = assets?.zarr;
+      const props = item.properties ?? {};
+      const assets = item.assets ?? {};
+      const zarrAsset = assets.zarr;
       if (!zarrAsset) continue;
 
       const zarrUrl = new URL(zarrAsset.href, itemUrl).href;
@@ -69,7 +82,7 @@ export async function loadCatalog(catalogUrl: string, signal?: AbortSignal): Pro
         utmZone: (props.utm_zone as number) ?? 0,
         epsg: props['proj:code'] ? parseInt((props['proj:code'] as string).split(':')[1], 10) : ((props.crs_epsg as number) ?? 0),
         bbox: item.bbox as [number, number, number, number],
-        geometry: (item.geometry as GeoJSON.Polygon),
+        geometry: item.geometry as GeoJSON.Polygon,
         zarrUrl,
         title: (item.title as string) ?? undefined,
       });
