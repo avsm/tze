@@ -5,6 +5,8 @@ import { mapInstance } from './map';
 import { sourceManager, metadata, bands, opacity, preview, loading, status, globalPreviewUrl, globalPreviewBounds } from './zarr';
 import { clearAllRegions } from './drawing';
 import { simSelectedPixel, simScores, simRefEmbedding } from './similarity';
+import { labels, isClassified } from './classifier';
+import { segmentPolygons } from './segmentation';
 
 export const catalogUrl = writable('https://dl2.geotessera.org/zarr/v1/catalog.json');
 export const catalogStatus = writable<'idle' | 'loading' | 'loaded' | 'error'>('idle');
@@ -82,7 +84,7 @@ export async function initManager(initialZoneId?: string): Promise<void> {
 /** Switch active year: updates preview URL and reinitializes the source manager. */
 export async function switchYear(year: string): Promise<void> {
   const years = get(availableYears);
-  if (!years.includes(year)) return;
+  if (!years.includes(year) || year === get(activeYear)) return;
 
   activeYear.set(year);
 
@@ -91,6 +93,9 @@ export async function switchYear(year: string): Promise<void> {
   simSelectedPixel.set(null);
   simRefEmbedding.set(null);
   simScores.set(new Map());
+  labels.set([]);
+  isClassified.set(false);
+  segmentPolygons.set({ type: 'FeatureCollection', features: [] });
 
   // Update global preview URL for this year
   const urls = get(globalPreviewUrls);
