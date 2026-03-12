@@ -1,30 +1,48 @@
-import { writable, get } from 'svelte/store';
+import { writable, derived, get } from 'svelte/store';
 import { ZarrSourceManager } from '@ucam-eo/maplibre-zarr-tessera';
 import type { ZoneDescriptor } from '../lib/stac';
 import { mapInstance } from './map';
 import { sourceManager, metadata, bands, opacity, preview, loading, status, globalPreviewUrl, globalPreviewBounds } from './zarr';
 
 export const catalogUrl = writable('https://dl2.geotessera.org/zarr/v1/catalog.json');
-export const zones = writable<ZoneDescriptor[]>([]);
 export const catalogStatus = writable<'idle' | 'loading' | 'loaded' | 'error'>('idle');
 export const catalogError = writable<string>('');
 
+/** All zones across all years, as returned by loadCatalog */
+export const allZones = writable<ZoneDescriptor[]>([]);
+
+/** Years discovered in the catalog, sorted ascending */
+export const availableYears = writable<string[]>([]);
+
+/** Currently active year */
+export const activeYear = writable<string>('');
+
+/** Per-year global preview URLs */
+export const globalPreviewUrls = writable<Record<string, string>>({});
+
+/** Zones filtered to the active year */
+export const zones = derived(
+  [allZones, activeYear],
+  ([$allZones, $activeYear]) =>
+    $activeYear ? $allZones.filter(z => z.id.endsWith(`_${$activeYear}`)) : $allZones
+);
+
 /** Initialize the multi-zone source manager. */
 export async function initManager(initialZoneId?: string): Promise<void> {
-  const allZones = get(zones);
+  const filteredZones = get(zones);
   const map = get(mapInstance);
-  if (!map || allZones.length === 0) return;
+  if (!map || filteredZones.length === 0) return;
 
   const oldManager = get(sourceManager);
   if (oldManager) oldManager.remove();
 
   status.set('Initializing...');
-  console.log('[initManager] Starting with', allZones.length, 'zones, initialZone:', initialZoneId);
+  console.log('[initManager] Starting with', filteredZones.length, 'zones, initialZone:', initialZoneId);
 
   try {
     const mobile = window.innerWidth < 640 || /iPhone|iPad|Android/i.test(navigator.userAgent);
     const manager = new ZarrSourceManager(
-      allZones.map(z => ({ id: z.id, bbox: z.bbox, zarrUrl: z.zarrUrl })),
+      filteredZones.map(z => ({ id: z.id, bbox: z.bbox, zarrUrl: z.zarrUrl })),
       {
         bands: get(bands),
         opacity: get(opacity),
@@ -46,7 +64,7 @@ export async function initManager(initialZoneId?: string): Promise<void> {
     sourceManager.set(manager);
 
     if (initialZoneId) {
-      const zone = allZones.find(z => z.id === initialZoneId);
+      const zone = filteredZones.find(z => z.id === initialZoneId);
       if (zone) await manager.getSource(zone.id);
     }
 
@@ -55,6 +73,56 @@ export async function initManager(initialZoneId?: string): Promise<void> {
     console.log('[initManager] Complete, manager ready');
   } catch (err) {
     console.error('[initManager] Failed:', err);
+    status.set(`Error: ${(err as Error).message}`);
+  }
+}
+
+/** Switch active year: updates preview URL and reinitializes the source manager. */
+export async function switchYear(year: string): Promise<void> {
+  const years = get(availableYears);
+  if (!years.includes(year)) return;
+
+  activeYear.set(year);
+
+  // Update global preview URL for this year
+  const urls = get(globalPreviewUrls);
+  globalPreviewUrl.set(urls[year] ?? '');
+
+  // Reinitialize the source manager with the new year's zones
+  const filteredZones = get(zones);
+  const map = get(mapInstance);
+  if (!map || filteredZones.length === 0) return;
+
+  const oldManager = get(sourceManager);
+  if (oldManager) oldManager.remove();
+
+  status.set(`Switching to ${year}...`);
+
+  try {
+    const mobile = window.innerWidth < 640 || /iPhone|iPad|Android/i.test(navigator.userAgent);
+    const manager = new ZarrSourceManager(
+      filteredZones.map(z => ({ id: z.id, bbox: z.bbox, zarrUrl: z.zarrUrl })),
+      {
+        bands: get(bands),
+        opacity: get(opacity),
+        preview: get(preview),
+        globalPreviewUrl: get(globalPreviewUrl),
+        globalPreviewBounds: get(globalPreviewBounds) ?? undefined,
+        maxCached: mobile ? 4 : undefined,
+      },
+    );
+
+    manager.on('metadata-loaded', (meta) => {
+      metadata.set(meta);
+      status.set(`Loaded: zone ${meta.utmZone}`);
+    });
+    manager.on('loading', (p) => loading.set(p));
+    manager.on('error', (err) => status.set(`Error: ${err.message}`));
+
+    await manager.addTo(map);
+    sourceManager.set(manager);
+    status.set(`${year} ready`);
+  } catch (err) {
     status.set(`Error: ${(err as Error).message}`);
   }
 }
