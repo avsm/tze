@@ -72,7 +72,6 @@
       $globalPreviewUrl = result.globalPreviewUrls[defaultYear] ?? result.globalPreviewUrl ?? '';
       $globalPreviewBounds = result.globalBounds;
       $catalogStatus = 'loaded';
-      console.log('[CatalogModal] Catalog loaded:', result.zones.length, 'zones, preview:', result.globalPreviewUrl);
       $status = `${result.zones.length} zones discovered${result.globalPreviewUrl ? ' (global preview available)' : ''}`;
     } catch (err) {
       console.error('[CatalogModal] fetchCatalog failed:', err);

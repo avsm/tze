@@ -1,6 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
-import { ZarrSourceManager } from '@ucam-eo/maplibre-zarr-tessera';
+import { ZarrSourceManager, clearZarrProtocolCache } from '@ucam-eo/maplibre-zarr-tessera';
 import type { ZoneDescriptor } from '../lib/stac';
+import { pointInBbox } from '../lib/stac';
 import { mapInstance } from './map';
 import { sourceManager, metadata, bands, opacity, preview, loading, status, globalPreviewUrl, globalPreviewBounds } from './zarr';
 import { clearAllRegions } from './drawing';
@@ -132,8 +133,18 @@ export async function switchYear(year: string): Promise<void> {
     manager.on('loading', (p) => loading.set(p));
     manager.on('error', (err) => status.set(`Error: ${err.message}`));
 
+    // Clear stale pyramid cache from previous year's tiles
+    clearZarrProtocolCache();
+
     await manager.addTo(map);
     sourceManager.set(manager);
+
+    // Eagerly open the zone the user is looking at so the preview layer appears immediately
+    const center = map.getCenter();
+    let initialZone = filteredZones.find(z => pointInBbox(center.lng, center.lat, z.bbox));
+    if (!initialZone) initialZone = filteredZones[0];
+    if (initialZone) await manager.getSource(initialZone.id);
+
     status.set(`${year} ready`);
   } catch (err) {
     status.set(`Error: ${(err as Error).message}`);

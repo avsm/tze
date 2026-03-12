@@ -177,6 +177,9 @@
     }
   }
 
+  // --- Year dropdown ---
+  let yearDropdownOpen = $state(false);
+
   // --- Regions dropdown ---
   let regionsOpen = $state(false);
   let fileInput: HTMLInputElement;
@@ -279,20 +282,38 @@
     <span class="text-term-cyan text-[11px] font-bold tracking-[0.2em] uppercase hidden sm:inline">TZE</span>
   </div>
 
-  <!-- Year toggle -->
+  <!-- Year selector -->
   {#if $availableYears.length > 1}
-    <div class="flex items-center rounded border border-gray-700/60 overflow-hidden h-5">
-      {#each $availableYears as year}
-        <button
-          onclick={() => switchYear(year)}
-          class="px-1.5 text-[9px] h-full transition-all
-                 {$activeYear === year
-                   ? 'bg-term-cyan/15 text-term-cyan border-term-cyan/40'
-                   : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/60'}"
-        >
-          {year}
-        </button>
-      {/each}
+    <div class="relative">
+      <button
+        onclick={() => { yearDropdownOpen = !yearDropdownOpen; }}
+        class="flex items-center gap-1 px-1.5 h-5 rounded text-[9px]
+               border border-gray-700/60 transition-all
+               text-term-cyan hover:border-term-cyan/40"
+      >
+        {$activeYear}
+        <ChevronDown size={9} class="text-gray-600" />
+      </button>
+
+      {#if yearDropdownOpen}
+        <button type="button" class="fixed inset-0 z-30 cursor-default" tabindex="-1" aria-label="Close year menu" onclick={() => { yearDropdownOpen = false; }}></button>
+        <div class="absolute top-full left-0 mt-1 z-40
+                    bg-gray-950 border border-gray-700/80 rounded shadow-xl
+                    min-w-[70px] py-1">
+          {#each $availableYears as year}
+            <button
+              onclick={() => { switchYear(year); yearDropdownOpen = false; }}
+              class="flex items-center w-full text-left px-3 py-1
+                     text-[10px] transition-colors
+                     {$activeYear === year
+                       ? 'text-term-cyan bg-term-cyan/10'
+                       : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'}"
+            >
+              {year}
+            </button>
+          {/each}
+        </div>
+      {/if}
     </div>
   {/if}
 
