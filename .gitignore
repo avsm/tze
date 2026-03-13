@@ -4,3 +4,4 @@ dist/
 .vite/
 *.tsbuildinfo
 .svelte-kit/
+docs/api/
