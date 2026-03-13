@@ -6,16 +6,25 @@
     "dev": "pnpm -F viewer dev",
     "build": "pnpm -F @ucam-eo/tessera build && pnpm -F @ucam-eo/maplibre-tessera build && pnpm -F @ucam-eo/tessera-tasks build && pnpm -F viewer build",
     "test": "pnpm -r test",
-    "check": "pnpm -r check"
+    "check": "pnpm -r check",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "pnpm build && changeset publish"
   },
   "engines": {
     "node": ">=20"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"],
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
     "overrides": {
-      "zarrita": "github:avsm/zarrita.js#coalesce&path:packages/zarrita",
-      "@zarrita/storage": "github:avsm/zarrita.js#coalesce&path:packages/@zarrita-storage"
+      "zarrita": "github:avsm/zarrita.js#9fd3970fafd1abf252c3ffb34cc61b6fd04f533d&path:packages/zarrita",
+      "@zarrita/storage": "github:avsm/zarrita.js#9fd3970fafd1abf252c3ffb34cc61b6fd04f533d&path:packages/@zarrita-storage"
     }
+  },
+  "devDependencies": {
+    "@changesets/changelog-github": "^0.6.0",
+    "@changesets/cli": "^2.30.0"
   }
 }

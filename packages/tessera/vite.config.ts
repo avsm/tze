@@ -1,6 +1,4 @@
 import { defineConfig } from 'vite';
-import dts from 'vite-plugin-dts';
-import { exec } from 'child_process';
 
 export default defineConfig({
   build: {
@@ -14,15 +12,4 @@ export default defineConfig({
       external: ['proj4', 'zarrita', '@zarrita/storage'],
     },
   },
-  plugins: [
-    dts(),
-    {
-      name: 'typedoc-on-build',
-      closeBundle() {
-        exec('typedoc', (err) => {
-          if (err) console.warn('[typedoc]', err.message);
-        });
-      },
-    },
-  ],
 });
