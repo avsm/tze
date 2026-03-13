@@ -10,7 +10,7 @@ export { TesseraTileRenderer } from './tile-renderer.js';
 export { openStore, fetchRegion } from './zarr-reader.js';
 export type { ZarrStore } from './zarr-reader.js';
 
-export type { GeoJsonPolygon, LoadChunksOptions } from './tessera-source.js';
+export type { LoadChunksOptions } from './tessera-source.js';
 
 export type {
   TesseraOptions,

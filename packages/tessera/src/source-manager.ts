@@ -21,7 +21,6 @@
  */
 import { EventEmitter } from './event-emitter.js';
 import { TesseraSource } from './tessera-source.js';
-import type { GeoJsonPolygon } from './tessera-source.js';
 import type {
   ZoneDescriptor,
   TesseraOptions,
@@ -69,7 +68,7 @@ function bboxOverlap(
  * @param polygon - GeoJSON Polygon.
  * @returns `[west, south, east, north]`.
  */
-function polygonBbox(polygon: GeoJsonPolygon): [number, number, number, number] {
+function polygonBbox(polygon: GeoJSON.Polygon): [number, number, number, number] {
   let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
   for (const [lng, lat] of polygon.coordinates[0]) {
     if (lng < w) w = lng;
@@ -128,7 +127,7 @@ export class SourceManager extends EventEmitter<TesseraEvents> {
    * @param polygon - A GeoJSON Polygon (outer ring used for bbox computation).
    * @returns Zone descriptors whose bbox overlaps the polygon's bbox.
    */
-  zonesForPolygon(polygon: GeoJsonPolygon): ZoneDescriptor[] {
+  zonesForPolygon(polygon: GeoJSON.Polygon): ZoneDescriptor[] {
     const pBbox = polygonBbox(polygon);
     return this.zones.filter(z => bboxOverlap(z.bbox, pBbox));
   }
@@ -212,7 +211,7 @@ export class SourceManager extends EventEmitter<TesseraEvents> {
    * @param polygon - A GeoJSON Polygon defining the region of interest.
    * @returns All chunk references overlapping the polygon, across all zones.
    */
-  async getChunksInRegion(polygon: GeoJsonPolygon): Promise<ManagedChunk[]> {
+  async getChunksInRegion(polygon: GeoJSON.Polygon): Promise<ManagedChunk[]> {
     const zones = this.zonesForPolygon(polygon);
     const srcs = await Promise.all(zones.map(z => this.getSource(z.id)));
     const allChunks: ManagedChunk[] = [];

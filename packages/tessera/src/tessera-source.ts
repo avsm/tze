@@ -14,17 +14,6 @@ import type {
   DebugLogEntry,
 } from './types.js';
 
-/**
- * Minimal GeoJSON Polygon representation.
- *
- * @remarks
- * Avoids a hard dependency on `@types/geojson`. Compatible with
- * the standard GeoJSON `Polygon` type.
- */
-export interface GeoJsonPolygon {
-  type: 'Polygon';
-  coordinates: number[][][];
-}
 
 /**
  * Options for {@link TesseraSource.loadChunks}.
@@ -358,7 +347,7 @@ export class TesseraSource extends EventEmitter<TesseraEvents> {
    *
    * @param polygon - A GeoJSON Polygon (outer ring used).
    */
-  getChunksInRegion(polygon: GeoJsonPolygon): ChunkRef[] {
+  getChunksInRegion(polygon: GeoJSON.Polygon): ChunkRef[] {
     if (!this.store || !this.proj) return [];
 
     // Convert polygon ring to UTM coordinates

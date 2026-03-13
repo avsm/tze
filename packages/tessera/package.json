@@ -24,6 +24,7 @@
     "zarrita": "^0.6.1"
   },
   "devDependencies": {
+    "@types/geojson": "^7946.0.16",
     "@types/proj4": "^2.19.0",
     "typedoc": "^0.28.0",
     "typedoc-plugin-markdown": "^4.0.0",
