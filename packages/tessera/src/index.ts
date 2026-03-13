@@ -1,6 +1,7 @@
 // @ucam-eo/tessera — core TESSERA embedding access library
 
 export { TesseraSource } from './tessera-source.js';
+export { SourceManager } from './source-manager.js';
 export { EventEmitter } from './event-emitter.js';
 export { UtmProjection } from './projection.js';
 
