@@ -1,6 +1,8 @@
 export { ZarrTesseraSource } from './zarr-source.js';
 export { ZarrSourceManager } from './source-manager.js';
 export { registerZarrProtocol, clearZarrProtocolCache } from './zarr-tile-protocol.js';
+export { MaplibreTesseraSource } from './maplibre-source.js';
+export { MaplibreTesseraManager } from './maplibre-manager.js';
 
 // Types that live in the local maplibre-tessera package
 export type { PreviewMode, MaplibreDisplayOptions, CachedChunk } from './types.js';
