@@ -89,12 +89,11 @@ export async function loadCatalog(catalogUrl: string, signal?: AbortSignal): Pro
 
   const globalPreviewUrls: Record<string, string> = {};
   for (const year of years) {
-    const candidateUrl = `${baseUrl}global_rgb_${year}.zarr`;
+    const candidateUrl = `${baseUrl}${year}.zarr/global_rgb`;
     try {
       const resp = await fetch(`${candidateUrl}/zarr.json`, { signal });
       if (resp.ok) {
         globalPreviewUrls[year] = candidateUrl;
-        // Read bounds from the first successful probe
         if (!globalBounds) {
           const zarrMeta = await resp.json() as Record<string, unknown>;
           const attrs = zarrMeta.attributes as Record<string, unknown> | undefined;
