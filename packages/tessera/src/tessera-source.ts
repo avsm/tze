@@ -648,6 +648,7 @@ export class TesseraSource extends EventEmitter<TesseraEvents> {
       ci, cj, stage: 'done', bytes: w * h * nBands * 4,
     });
     this.emit('chunk-loaded', { ci, cj });
+    this.emit('embeddings-loaded', { ci, cj });
   }
 
   /**
