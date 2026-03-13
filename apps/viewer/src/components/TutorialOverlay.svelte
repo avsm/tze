@@ -12,7 +12,7 @@
     endTutorial,
   } from '../stores/tutorial';
   import { mapInstance } from '../stores/map';
-  import { sourceManager, metadata } from '../stores/zarr';
+  import { sourceManager, displayManager, metadata } from '../stores/zarr';
   import { activeTool } from '../stores/tools';
   import { simThreshold, simScores, simRefEmbedding, simSelectedPixel, simEmbeddingTileCount } from '../stores/similarity';
   import { classes, labels, isClassified, classificationOpacity, kValue, confidenceThreshold } from '../stores/classifier';
@@ -87,11 +87,13 @@
   function buildContext(): TutorialContext | null {
     const map = get(mapInstance);
     const mgr = get(sourceManager);
+    const dm = get(displayManager);
     if (!map || !mgr) return null;
 
     return {
       map,
       manager: mgr,
+      display: dm ?? undefined,
       stores: {
         activeTool,
         simThreshold,

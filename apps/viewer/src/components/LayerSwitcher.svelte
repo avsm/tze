@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Globe, Layers } from 'lucide-svelte';
   import { mapInstance } from '../stores/map';
-  import { sourceManager } from '../stores/zarr';
+  import { displayManager } from '../stores/zarr';
 
   const VECTOR_SOURCE_ID = 'vector-overlay-src';
   const VECTOR_LAYER_IDS = [
@@ -20,7 +20,7 @@
     const map = $mapInstance;
     if (map && vectorOverlay && !map.getSource(VECTOR_SOURCE_ID)) {
       addVectorOverlay(map);
-      $sourceManager?.raiseAllLayers();
+      $displayManager?.raiseAllLayers();
     }
   });
 
@@ -57,7 +57,7 @@
     } else {
       removeVectorOverlay(map);
     }
-    $sourceManager?.raiseAllLayers();
+    $displayManager?.raiseAllLayers();
   }
 
   function addVectorOverlay(map: maplibregl.Map) {

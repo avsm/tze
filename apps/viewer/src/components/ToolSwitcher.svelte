@@ -1,6 +1,6 @@
 <script lang="ts">
   import { activeTool, type ToolId } from '../stores/tools';
-  import { sourceManager, metadata } from '../stores/zarr';
+  import { displayManager, metadata } from '../stores/zarr';
   import { segmentVisible } from '../stores/segmentation';
   import { get } from 'svelte/store';
   import SimilaritySearch from './SimilaritySearch.svelte';
@@ -17,7 +17,7 @@
     const tool = $activeTool;
     if (prevTool !== null && prevTool !== tool) {
       if (prevTool === 'segmenter') segmentVisible.set(false);
-      get(sourceManager)?.clearClassificationOverlays();
+      get(displayManager)?.clearClassificationOverlays();
       if (tool === 'segmenter') segmentVisible.set(true);
       if (tool === 'similarity') similarityRef?.restoreOverlays();
     }

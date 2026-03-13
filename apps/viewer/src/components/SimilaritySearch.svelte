@@ -1,6 +1,6 @@
 <script lang="ts">
   import { get } from 'svelte/store';
-  import { sourceManager } from '../stores/zarr';
+  import { sourceManager, displayManager } from '../stores/zarr';
   import { simScores, simRefEmbedding, simSelectedPixel, simThreshold, simEmbeddingTileCount } from '../stores/similarity';
   import { roiLoading } from '../stores/drawing';
   import { computeSimilarityScores, renderSimilarityCanvas } from '@ucam-eo/tessera-tasks';
@@ -53,12 +53,13 @@
   /** CPU compute — runs once per reference pixel selection, across all zones. */
   function runCompute() {
     const mgr = $sourceManager;
+    const dm = $displayManager;
     if (!mgr || !$simRefEmbedding) return;
     if (isComputing) { pendingRecompute = true; return; }
     isComputing = true;
 
     try {
-      mgr.clearSimilarityOverlay();
+      dm?.clearSimilarityOverlay();
       const regions = mgr.getEmbeddingRegions();
       if (regions.size === 0) return;
 
@@ -80,22 +81,22 @@
 
   /** Render threshold into per-zone canvases and push to map. */
   function applyThreshold() {
-    const mgr = $sourceManager;
+    const dm = $displayManager;
     const results = get(simScores);
     const threshold = $simThreshold;
-    if (!mgr || results.size === 0) return;
+    if (!dm || results.size === 0) return;
 
     for (const [zoneId, result] of results) {
       let canvas = overlayCanvases.get(zoneId);
       canvas = renderSimilarityCanvas(result, threshold, canvas);
       overlayCanvases.set(zoneId, canvas);
-      const src = mgr.getOpenSource(zoneId);
+      const src = dm.getOpenDisplaySource(zoneId);
       src?.setSimilarityOverlay(canvas);
     }
   }
 
   function handleClear() {
-    $sourceManager?.clearSimilarityOverlay();
+    $displayManager?.clearSimilarityOverlay();
     $simSelectedPixel = null;
     $simRefEmbedding = null;
     $simScores = new Map();

@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { sourceManager, metadata } from '../stores/zarr';
+  import { sourceManager, displayManager, metadata } from '../stores/zarr';
   import {
     classes, labels, activeClassName, activeClass,
     kValue, confidenceThreshold, classificationOpacity, isClassified,
     labelCounts, addClass, removeClass, clearLabels,
+    classificationStore,
   } from '../stores/classifier';
+  import { get } from 'svelte/store';
   import { classifyTiles, type ClassifyProgress } from '@ucam-eo/tessera-tasks';
   interface Props {
     onOpenOsm?: () => void;
@@ -38,6 +40,7 @@
 
   async function runClassification() {
     const mgr = $sourceManager;
+    const dm = $displayManager;
     if (!mgr || isClassifying) return;
     isClassifying = true;
     classifyProgress = null;
@@ -52,14 +55,14 @@
     console.log('[classify] labels:', allLabels.length, 'across classes:', [...byClass.entries()].map(([id, n]) => `id=${id}:${n}`));
 
     try {
-      mgr.clearClassificationOverlays();
+      dm?.clearClassificationOverlays();
       const regions = mgr.getEmbeddingRegions();
       if (regions.size === 0) return;
       const opacity = $classificationOpacity;
 
       for (const [zoneId, region] of regions) {
-        const source = mgr.getOpenSource(zoneId);
-        if (!source) continue;
+        const displaySource = dm?.getOpenDisplaySource(zoneId);
+        if (!displaySource) continue;
         await classifyTiles(
           region,
           allLabels,
@@ -68,9 +71,9 @@
           $confidenceThreshold,
           (p) => { classifyProgress = p; },
           (ci, cj, canvas, classMap, w, h) => {
-            source.addClassificationOverlay(ci, cj, canvas);
-            source.setClassificationOpacity(opacity);
-            source.setClassificationMap(ci, cj, classMap, w, h);
+            displaySource.addClassificationOverlay(ci, cj, canvas);
+            displaySource.setClassificationOpacity(opacity);
+            get(classificationStore).set(zoneId, ci, cj, classMap, w, h);
             $isClassified = true;
           },
         );
@@ -82,13 +85,13 @@
   }
 
   function handleClear() {
-    $sourceManager?.clearClassificationOverlays();
+    $displayManager?.clearClassificationOverlays();
     $isClassified = false;
   }
 
   function updateClassificationOpacity(val: number) {
     $classificationOpacity = val;
-    $sourceManager?.setClassificationOpacity(val);
+    $displayManager?.setClassificationOpacity(val);
   }
 </script>
 

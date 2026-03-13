@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { bands, sourceManager, metadata } from '../stores/zarr';
+  import { bands, displayManager, metadata } from '../stores/zarr';
 
   let r = $state($bands[0]);
   let g = $state($bands[1]);
@@ -7,7 +7,7 @@
 
   function updateBands() {
     $bands = [r, g, b];
-    $sourceManager?.setBands([r, g, b]);
+    $displayManager?.setBands([r, g, b]);
   }
 
   const enabled = $derived(!!$metadata);

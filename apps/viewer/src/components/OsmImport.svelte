@@ -123,7 +123,7 @@
 
     try {
       // Sample from all zones and merge
-      const sampled = new Map<string, Array<{ lngLat: [number, number]; embeddingAt: import('@ucam-eo/maplibre-tessera').EmbeddingAt }>>();
+      const sampled = new Map<string, Array<{ lngLat: [number, number]; embeddingAt: import('@ucam-eo/tessera').EmbeddingAt }>>();
       for (const [zoneId] of regions) {
         const src = mgr.getOpenSource(zoneId);
         if (!src) continue;
@@ -142,7 +142,7 @@
         .filter(c => sampled.has(c.tag))
         .map(c => ({ name: c.displayName, color: c.suggestedColor }));
 
-      const newLabels = new Map<string, Array<{ lngLat: [number, number]; embeddingAt: import('@ucam-eo/maplibre-tessera').EmbeddingAt }>>();
+      const newLabels = new Map<string, Array<{ lngLat: [number, number]; embeddingAt: import('@ucam-eo/tessera').EmbeddingAt }>>();
       for (const c of chosen) {
         const s = sampled.get(c.tag);
         if (s && s.length > 0) {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { sourceManager } from '../stores/zarr';
-  import type { DebugLogEntry } from '@ucam-eo/maplibre-tessera';
+  import type { DebugLogEntry } from '@ucam-eo/tessera';
 
   let logs = $state<DebugLogEntry[]>([]);
   let visible = $state(false);

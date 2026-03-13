@@ -14,9 +14,9 @@
   import DebugConsole from './components/DebugConsole.svelte';
   import ToolSwitcher from './components/ToolSwitcher.svelte';
   import type SimilaritySearch from './components/SimilaritySearch.svelte';
-  import { sourceManager } from './stores/zarr';
+  import { sourceManager, displayManager } from './stores/zarr';
   import { get } from 'svelte/store';
-  import { activeClass, classes, labels, addLabel, removeLabel, isClassified } from './stores/classifier';
+  import { activeClass, classes, labels, addLabel, removeLabel, isClassified, classificationStore } from './stores/classifier';
   import { activeTool } from './stores/tools';
   import { zones } from './stores/stac';
   import { pointInBbox } from './lib/stac';
@@ -313,7 +313,7 @@
       const tipY = e.originalEvent.clientY - 10;
 
       // Check classification pixel under cursor
-      const classId = mgr?.getClassificationAt(e.lngLat.lng, e.lngLat.lat) ?? null;
+      const classId = mgr ? get(classificationStore).getAt(e.lngLat.lng, e.lngLat.lat, mgr) : null;
 
       if (classId != null && classId >= 0) {
         const cls = get(classes).find(c => c.id === classId);
@@ -407,14 +407,15 @@
 
     // Lazily open zone sources as the user pans into new zones
     map.on('moveend', () => {
-      const mgr = get(sourceManager);
-      if (!mgr) return;
+      const dm = get(displayManager);
+      const sm = get(sourceManager);
+      if (!dm || !sm) return;
       const center = map.getCenter();
       const currentZones = get(zones);
       for (const zone of currentZones) {
         if (pointInBbox(center.lng, center.lat, zone.bbox)) {
-          if (!mgr.getOpenSource(zone.id)) {
-            mgr.getSource(zone.id);
+          if (!sm.getOpenSource(zone.id)) {
+            dm.getDisplaySource(zone.id);
           }
           break;
         }

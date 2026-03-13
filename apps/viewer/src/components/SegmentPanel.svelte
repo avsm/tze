@@ -53,6 +53,7 @@
       for (const [zoneId, region] of regions) {
         const src = mgr.getOpenSource(zoneId);
         if (!src) continue;
+        // SegmentationSession.run expects a TesseraSource for projection
         const results = await segSession.run(
           region,
           src,
