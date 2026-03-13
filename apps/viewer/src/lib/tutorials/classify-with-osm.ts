@@ -31,7 +31,7 @@ export const classifyWithOsm: TutorialDef = {
         ctx.stores.classes.set([]);
         ctx.stores.labels.set([]);
         ctx.stores.isClassified.set(false);
-        ctx.manager.clearClassificationOverlays();
+        ctx.display?.clearClassificationOverlays();
         // Switch to classifier tab
         ctx.stores.activeTool.set('classifier');
         await new Promise((r) => setTimeout(r, 300));
@@ -122,14 +122,14 @@ export const classifyWithOsm: TutorialDef = {
         const confidence = get(ctx.stores.confidenceThreshold);
         const opacity = get(ctx.stores.classificationOpacity);
 
-        ctx.manager.clearClassificationOverlays();
+        ctx.display?.clearClassificationOverlays();
         const regions = ctx.manager.getEmbeddingRegions();
         if (regions.size === 0) return;
         const first = regions.entries().next().value;
         if (!first) return;
         const [zoneId, region] = first;
-        const src = ctx.manager.getOpenSource(zoneId);
-        if (!src) return;
+        const displaySrc = ctx.display?.getOpenDisplaySource(zoneId);
+        if (!displaySrc) return;
 
         await classifyTiles(
           region,
@@ -138,10 +138,9 @@ export const classifyWithOsm: TutorialDef = {
           k,
           confidence,
           undefined,
-          (ci, cj, canvas, classMap, w, h) => {
-            src.addClassificationOverlay(ci, cj, canvas);
-            src.setClassificationOpacity(opacity);
-            src.setClassificationMap(ci, cj, classMap, w, h);
+          (ci, cj, canvas) => {
+            displaySrc.addClassificationOverlay(ci, cj, canvas);
+            displaySrc.setClassificationOpacity(opacity);
             ctx.stores.isClassified.set(true);
           },
         );

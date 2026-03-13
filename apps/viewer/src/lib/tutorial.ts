@@ -1,8 +1,9 @@
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import type { ZarrSourceManager } from '@ucam-eo/maplibre-tessera';
+import type { SourceManager } from '@ucam-eo/tessera';
+import type { MaplibreTesseraManager } from '@ucam-eo/maplibre-tessera';
 import type { Writable, Readable } from 'svelte/store';
 import type { ToolId } from '../stores/tools';
-import type { StoreMetadata } from '@ucam-eo/maplibre-tessera';
+import type { StoreMetadata } from '@ucam-eo/tessera';
 import type { SimilarityResult } from '@ucam-eo/tessera-tasks';
 import type { ClassDef, LabelPoint } from '@ucam-eo/tessera-tasks';
 
@@ -36,11 +37,12 @@ export interface TutorialDef {
 
 export interface TutorialContext {
   map: MaplibreMap;
-  manager: ZarrSourceManager;
+  manager: SourceManager;
+  display?: MaplibreTesseraManager;
   stores: {
     activeTool: Writable<ToolId>;
     simThreshold: Writable<number>;
-    sourceManager: Writable<ZarrSourceManager | null>;
+    sourceManager: Writable<SourceManager | null>;
     metadata: Readable<StoreMetadata | null>;
     simScores: Writable<Map<string, SimilarityResult>>;
     simRefEmbedding: Writable<Float32Array | null>;

@@ -1,8 +1,8 @@
 /** Point-in-polygon testing and embedding sampling for OSM polygons. */
 
-import type { ZarrTesseraSource } from '@ucam-eo/maplibre-tessera';
+import type { TesseraSource } from '@ucam-eo/tessera';
 import type { OsmCategory } from './overpass';
-import type { EmbeddingAt } from '@ucam-eo/maplibre-tessera';
+import type { EmbeddingAt } from '@ucam-eo/tessera';
 
 export interface SampledLabel {
   lngLat: [number, number];
@@ -63,7 +63,7 @@ function computeStride(
 /** Sample embeddings from pixels falling within OSM category polygons.
  *  Returns a Map from tag to sampled labels. */
 export async function sampleOsmCategories(
-  source: ZarrTesseraSource,
+  source: TesseraSource,
   categories: OsmCategory[],
   onProgress?: (p: SampleProgress) => void,
 ): Promise<Map<string, SampledLabel[]>> {

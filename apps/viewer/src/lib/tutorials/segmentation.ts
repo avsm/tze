@@ -30,7 +30,7 @@ export const segmentationTutorial: TutorialDef = {
         ctx.stores.classes.set([]);
         ctx.stores.labels.set([]);
         ctx.stores.isClassified.set(false);
-        ctx.manager.clearClassificationOverlays();
+        ctx.display?.clearClassificationOverlays();
         // Clear previous segmentation state
         segmentPolygons.set({ type: 'FeatureCollection', features: [] });
         await new Promise((r) => setTimeout(r, 300));
@@ -165,7 +165,7 @@ export const segmentationTutorial: TutorialDef = {
         'Reducing the embedding overlay so the satellite imagery is clearer.\n' +
         'The orange polygons are pulsing to show the detected solar panel installations.',
       action: async (ctx) => {
-        ctx.manager.setOpacity(0.15);
+        ctx.display?.setOpacity(0.15);
 
         // Pulse the segment polygon layers 3 times
         const map = ctx.map;
