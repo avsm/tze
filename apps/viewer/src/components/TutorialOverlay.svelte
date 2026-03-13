@@ -123,14 +123,14 @@
       waitForEvent(event: string, timeout = 30000) {
         return new Promise<void>((resolve) => {
           const timer = setTimeout(() => {
-            mgr.off(event, handler);
+            (mgr as any).off(event, handler);
             resolve();
           }, timeout);
           const handler = () => {
             clearTimeout(timer);
             resolve();
           };
-          mgr.on(event, handler);
+          (mgr as any).on(event, handler);
         });
       },
       async ensureZoneAt(lng: number, lat: number) {

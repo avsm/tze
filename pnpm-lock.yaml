@@ -23,6 +23,9 @@ importers:
       '@ucam-eo/maplibre-tessera':
         specifier: workspace:*
         version: link:../../packages/maplibre-tessera
+      '@ucam-eo/tessera':
+        specifier: workspace:*
+        version: link:../../packages/tessera
       '@ucam-eo/tessera-tasks':
         specifier: workspace:*
         version: link:../../packages/tessera-tasks
@@ -178,9 +181,9 @@ importers:
 
   packages/tessera-tasks:
     dependencies:
-      '@ucam-eo/maplibre-tessera':
+      '@ucam-eo/tessera':
         specifier: workspace:*
-        version: link:../maplibre-tessera
+        version: link:../tessera
     devDependencies:
       '@tensorflow/tfjs-backend-webgl':
         specifier: ^4.22.0
@@ -188,6 +191,9 @@ importers:
       '@tensorflow/tfjs-core':
         specifier: ^4.22.0
         version: 4.22.0
+      '@types/geojson':
+        specifier: ^7946.0.16
+        version: 7946.0.16
       onnxruntime-web:
         specifier: ^1.24.2
         version: 1.24.2

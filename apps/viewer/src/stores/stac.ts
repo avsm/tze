@@ -49,9 +49,6 @@ export async function initManager(initialZoneId?: string): Promise<void> {
     const mobile = window.innerWidth < 640 || /iPhone|iPad|Android/i.test(navigator.userAgent);
     const sm = new SourceManager(
       filteredZones.map(z => ({ id: z.id, bbox: z.bbox, zarrUrl: z.zarrUrl })),
-      {
-        maxCached: mobile ? 4 : undefined,
-      },
     );
 
     const dm = new MaplibreTesseraManager(sm, {
@@ -60,6 +57,7 @@ export async function initManager(initialZoneId?: string): Promise<void> {
       preview: get(preview),
       globalPreviewUrl: get(globalPreviewUrl),
       globalPreviewBounds: get(globalPreviewBounds) ?? undefined,
+      maxCached: mobile ? 4 : undefined,
     });
 
     sm.on('metadata-loaded', (meta) => {
@@ -121,9 +119,6 @@ export async function switchYear(year: string): Promise<void> {
     const mobile = window.innerWidth < 640 || /iPhone|iPad|Android/i.test(navigator.userAgent);
     const sm = new SourceManager(
       filteredZones.map(z => ({ id: z.id, bbox: z.bbox, zarrUrl: z.zarrUrl })),
-      {
-        maxCached: mobile ? 4 : undefined,
-      },
     );
 
     const dm = new MaplibreTesseraManager(sm, {
@@ -132,6 +127,7 @@ export async function switchYear(year: string): Promise<void> {
       preview: get(preview),
       globalPreviewUrl: get(globalPreviewUrl),
       globalPreviewBounds: get(globalPreviewBounds) ?? undefined,
+      maxCached: mobile ? 4 : undefined,
     });
 
     sm.on('metadata-loaded', (meta) => {
