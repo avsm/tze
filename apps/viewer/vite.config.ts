@@ -5,7 +5,7 @@ import path from 'path';
 import { ortWasmPlugin } from '@ucam-eo/tessera-tasks/vite';
 
 export default defineConfig({
-  base: './',
+  base: '/',
   plugins: [svelte(), tailwindcss(), ortWasmPlugin()],
   server: {
     proxy: {
