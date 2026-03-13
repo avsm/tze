@@ -1,7 +1,13 @@
 import { writable } from 'svelte/store';
-import type { StoreMetadata, ZarrSourceManager } from '@ucam-eo/maplibre-tessera';
+import type { SourceManager, StoreMetadata } from '@ucam-eo/tessera';
+import type { MaplibreTesseraManager } from '@ucam-eo/maplibre-tessera';
 
-export const sourceManager = writable<ZarrSourceManager | null>(null);
+/** Core data manager — embedding queries, zone routing, events. */
+export const sourceManager = writable<SourceManager | null>(null);
+
+/** MapLibre display manager — layers, overlays, animations. */
+export const displayManager = writable<MaplibreTesseraManager | null>(null);
+
 export const metadata = writable<StoreMetadata | null>(null);
 export const bands = writable<[number, number, number]>([0, 1, 2]);
 export const opacity = writable(0.6);

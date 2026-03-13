@@ -1,9 +1,10 @@
 import { writable, derived, get } from 'svelte/store';
-import { ZarrSourceManager, clearZarrProtocolCache } from '@ucam-eo/maplibre-tessera';
+import { SourceManager } from '@ucam-eo/tessera';
+import { MaplibreTesseraManager, clearZarrProtocolCache } from '@ucam-eo/maplibre-tessera';
 import type { ZoneDescriptor } from '../lib/stac';
 import { pointInBbox } from '../lib/stac';
 import { mapInstance } from './map';
-import { sourceManager, metadata, bands, opacity, preview, loading, status, globalPreviewUrl, globalPreviewBounds } from './zarr';
+import { sourceManager, displayManager, metadata, bands, opacity, preview, loading, status, globalPreviewUrl, globalPreviewBounds } from './zarr';
 import { clearAllRegions } from './drawing';
 import { simSelectedPixel, simScores, simRefEmbedding } from './similarity';
 import { labels, isClassified } from './classifier';
@@ -38,39 +39,43 @@ export async function initManager(initialZoneId?: string): Promise<void> {
   const map = get(mapInstance);
   if (!map || filteredZones.length === 0) return;
 
-  const oldManager = get(sourceManager);
-  if (oldManager) oldManager.remove();
+  const oldDisplay = get(displayManager);
+  if (oldDisplay) oldDisplay.remove();
 
   status.set('Initializing...');
   console.log('[initManager] Starting with', filteredZones.length, 'zones, initialZone:', initialZoneId);
 
   try {
     const mobile = window.innerWidth < 640 || /iPhone|iPad|Android/i.test(navigator.userAgent);
-    const manager = new ZarrSourceManager(
+    const sm = new SourceManager(
       filteredZones.map(z => ({ id: z.id, bbox: z.bbox, zarrUrl: z.zarrUrl })),
       {
-        bands: get(bands),
-        opacity: get(opacity),
-        preview: get(preview),
-        globalPreviewUrl: get(globalPreviewUrl),
-        globalPreviewBounds: get(globalPreviewBounds) ?? undefined,
         maxCached: mobile ? 4 : undefined,
       },
     );
 
-    manager.on('metadata-loaded', (meta) => {
+    const dm = new MaplibreTesseraManager(sm, {
+      bands: get(bands),
+      opacity: get(opacity),
+      preview: get(preview),
+      globalPreviewUrl: get(globalPreviewUrl),
+      globalPreviewBounds: get(globalPreviewBounds) ?? undefined,
+    });
+
+    sm.on('metadata-loaded', (meta) => {
       metadata.set(meta);
       status.set(`Loaded: zone ${meta.utmZone}`);
     });
-    manager.on('loading', (p) => loading.set(p));
-    manager.on('error', (err) => status.set(`Error: ${err.message}`));
+    sm.on('loading', (p) => loading.set(p));
+    sm.on('error', (err) => status.set(`Error: ${err.message}`));
 
-    await manager.addTo(map);
-    sourceManager.set(manager);
+    await dm.addTo(map);
+    sourceManager.set(sm);
+    displayManager.set(dm);
 
     if (initialZoneId) {
       const zone = filteredZones.find(z => z.id === initialZoneId);
-      if (zone) await manager.getSource(zone.id);
+      if (zone) await dm.getDisplaySource(zone.id);
     }
 
     catalogStatus.set('loaded');
@@ -107,43 +112,47 @@ export async function switchYear(year: string): Promise<void> {
   const map = get(mapInstance);
   if (!map || filteredZones.length === 0) return;
 
-  const oldManager = get(sourceManager);
-  if (oldManager) oldManager.remove();
+  const oldDisplay = get(displayManager);
+  if (oldDisplay) oldDisplay.remove();
 
   status.set(`Switching to ${year}...`);
 
   try {
     const mobile = window.innerWidth < 640 || /iPhone|iPad|Android/i.test(navigator.userAgent);
-    const manager = new ZarrSourceManager(
+    const sm = new SourceManager(
       filteredZones.map(z => ({ id: z.id, bbox: z.bbox, zarrUrl: z.zarrUrl })),
       {
-        bands: get(bands),
-        opacity: get(opacity),
-        preview: get(preview),
-        globalPreviewUrl: get(globalPreviewUrl),
-        globalPreviewBounds: get(globalPreviewBounds) ?? undefined,
         maxCached: mobile ? 4 : undefined,
       },
     );
 
-    manager.on('metadata-loaded', (meta) => {
+    const dm = new MaplibreTesseraManager(sm, {
+      bands: get(bands),
+      opacity: get(opacity),
+      preview: get(preview),
+      globalPreviewUrl: get(globalPreviewUrl),
+      globalPreviewBounds: get(globalPreviewBounds) ?? undefined,
+    });
+
+    sm.on('metadata-loaded', (meta) => {
       metadata.set(meta);
       status.set(`Loaded: zone ${meta.utmZone}`);
     });
-    manager.on('loading', (p) => loading.set(p));
-    manager.on('error', (err) => status.set(`Error: ${err.message}`));
+    sm.on('loading', (p) => loading.set(p));
+    sm.on('error', (err) => status.set(`Error: ${err.message}`));
 
     // Clear stale pyramid cache from previous year's tiles
     clearZarrProtocolCache();
 
-    await manager.addTo(map);
-    sourceManager.set(manager);
+    await dm.addTo(map);
+    sourceManager.set(sm);
+    displayManager.set(dm);
 
     // Eagerly open the zone the user is looking at so the preview layer appears immediately
     const center = map.getCenter();
     let initialZone = filteredZones.find(z => pointInBbox(center.lng, center.lat, z.bbox));
     if (!initialZone) initialZone = filteredZones[0];
-    if (initialZone) await manager.getSource(initialZone.id);
+    if (initialZone) await dm.getDisplaySource(initialZone.id);
 
     status.set(`${year} ready`);
   } catch (err) {

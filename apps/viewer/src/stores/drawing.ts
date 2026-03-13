@@ -1,5 +1,5 @@
 import { writable, derived, get } from 'svelte/store';
-import { sourceManager } from './zarr';
+import { sourceManager, displayManager } from './zarr';
 import { simEmbeddingTileCount } from './similarity';
 
 export type DrawMode = 'polygon' | 'rectangle';
@@ -34,11 +34,12 @@ let nextId = 0;
 
 /** Called when terra-draw finishes a shape. Starts loading chunks for the region. */
 export async function addRegion(feature: GeoJSON.Feature): Promise<void> {
-  const manager = get(sourceManager);
-  if (!manager) return;
+  const sm = get(sourceManager);
+  const dm = get(displayManager);
+  if (!sm) return;
 
   const geometry = feature.geometry as GeoJSON.Polygon;
-  const managedChunks = await manager.getChunksInRegion(geometry);
+  const managedChunks = await sm.getChunksInRegion(geometry);
 
   const region: RoiRegion = {
     id: `roi-${nextId++}`,
@@ -60,9 +61,10 @@ export async function addRegion(feature: GeoJSON.Feature): Promise<void> {
   }
 
   // Start animations per zone
-  for (const [zoneId, chunks] of byZone) {
-    const src = manager.getOpenSource(zoneId);
-    src?.startRegionAnimation(geometry, chunks);
+  if (dm) {
+    for (const [zoneId, chunks] of byZone) {
+      dm.startRegionAnimation(zoneId, geometry, chunks);
+    }
   }
 
   // Load per zone with progress tracking (throttled to one update per frame)
@@ -72,18 +74,20 @@ export async function addRegion(feature: GeoJSON.Feature): Promise<void> {
   let rafId = 0;
 
   for (const [zoneId, chunks] of byZone) {
-    const src = await manager.getSource(zoneId);
+    const displaySrc = dm ? await dm.getDisplaySource(zoneId) : null;
     const baseLoaded = globalLoaded;
-    await src.loadChunkBatch(chunks, (loaded, _t) => {
-      globalLoaded = baseLoaded + loaded;
-      src.updateRegionAnimation(loaded, chunks.length, chunks[Math.min(loaded - 1, chunks.length - 1)]?.ci, chunks[Math.min(loaded - 1, chunks.length - 1)]?.cj);
-      if (!rafId) {
-        rafId = requestAnimationFrame(() => {
-          rafId = 0;
-          roiLoading.set({ loaded: globalLoaded, total });
-        });
-      }
-    });
+    if (displaySrc) {
+      await displaySrc.loadChunkBatch(chunks, (loaded, _t, ci, cj) => {
+        globalLoaded = baseLoaded + loaded;
+        if (dm) dm.updateRegionAnimation(zoneId, loaded, chunks.length, ci, cj);
+        if (!rafId) {
+          rafId = requestAnimationFrame(() => {
+            rafId = 0;
+            roiLoading.set({ loaded: globalLoaded, total });
+          });
+        }
+      });
+    }
     // Cancel any pending rAF and flush final count before next zone
     if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
     roiLoading.set({ loaded: globalLoaded, total });
@@ -93,13 +97,15 @@ export async function addRegion(feature: GeoJSON.Feature): Promise<void> {
   if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
 
   // Stop all animations and re-render
-  manager.stopRegionAnimation();
-  manager.recolorAllChunks();
+  if (dm) {
+    dm.stopRegionAnimation();
+    dm.recolorAllChunks();
+  }
 
   // Record which chunks this region owns (zone-prefixed keys)
   const loadedKeys: string[] = [];
   for (const { zoneId, ci, cj } of managedChunks) {
-    if (manager.regionHasTile(zoneId, ci, cj)) {
+    if (sm.regionHasTile(zoneId, ci, cj)) {
       loadedKeys.push(`${zoneId}:${ci}_${cj}`);
     }
   }
@@ -108,7 +114,7 @@ export async function addRegion(feature: GeoJSON.Feature): Promise<void> {
   );
 
   roiLoading.set(null);
-  simEmbeddingTileCount.set(manager.totalTileCount());
+  simEmbeddingTileCount.set(sm.totalTileCount());
 }
 
 /** Remove a single region. Evict its exclusive tiles from the embedding cache. */
@@ -127,8 +133,9 @@ export function removeRegion(regionId: string): void {
   const exclusiveKeys = target.chunkKeys.filter(k => !otherKeys.has(k));
 
   // Evict exclusive tiles from their zone's region buffer
-  const manager = get(sourceManager);
-  if (manager) {
+  const sm = get(sourceManager);
+  const dm = get(displayManager);
+  if (sm) {
     for (const k of exclusiveKeys) {
       // Parse "zoneId:ci_cj"
       const colonIdx = k.indexOf(':');
@@ -136,26 +143,19 @@ export function removeRegion(regionId: string): void {
       const [ciStr, cjStr] = k.substring(colonIdx + 1).split('_');
       const ci = parseInt(ciStr), cj = parseInt(cjStr);
 
-      const src = manager.getOpenSource(zoneId);
-      if (!src?.embeddingRegion) continue;
+      const src = sm.getOpenSource(zoneId);
+      if (!src) continue;
 
-      const region = src.embeddingRegion;
-      if (ci >= region.ciMin && ci <= region.ciMax && cj >= region.cjMin && cj <= region.cjMax) {
-        const t = (ci - region.ciMin) * region.gridCols + (cj - region.cjMin);
-        const base = t * region.tileW * region.tileH * region.nBands;
-        const len = region.tileW * region.tileH * region.nBands;
-        for (let i = 0; i < len; i++) region.emb[base + i] = NaN;
-        region.loaded[t] = 0;
-      }
+      src.evictTile(ci, cj);
 
       // If zone has no loaded tiles, clear its region entirely
-      if (src.regionTileCount() === 0) {
-        src.embeddingRegion = null;
+      if (src.tileCount === 0) {
+        src.clearRegion();
       }
     }
 
-    manager.clearClassificationOverlays();
-    simEmbeddingTileCount.set(manager.totalTileCount());
+    if (dm) dm.clearClassificationOverlays();
+    simEmbeddingTileCount.set(sm.totalTileCount());
   }
 
   roiRegions.update(rs => rs.filter(r => r.id !== regionId));
@@ -163,12 +163,13 @@ export function removeRegion(regionId: string): void {
 
 /** Clear all regions and the entire embedding cache. */
 export function clearAllRegions(): void {
-  const manager = get(sourceManager);
-  if (manager) {
-    for (const src of manager.getActiveSources().values()) {
-      src.embeddingRegion = null;
+  const sm = get(sourceManager);
+  const dm = get(displayManager);
+  if (sm) {
+    for (const src of sm.getActiveSources().values()) {
+      src.clearRegion();
     }
-    manager.clearClassificationOverlays();
+    if (dm) dm.clearClassificationOverlays();
   }
   roiRegions.set([]);
   roiLoading.set(null);

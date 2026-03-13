@@ -1,6 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
-import type { EmbeddingAt } from '@ucam-eo/maplibre-tessera';
+import type { EmbeddingAt } from '@ucam-eo/tessera';
 import type { ClassDef, LabelSource, LabelPoint } from '@ucam-eo/tessera-tasks';
+import { ClassificationStore } from '@ucam-eo/tessera-tasks';
 export type { ClassDef, LabelSource, LabelPoint };
 
 // --- Stores ---
@@ -11,6 +12,7 @@ export const kValue = writable(5);
 export const confidenceThreshold = writable(0.5);
 export const classificationOpacity = writable(0.7);
 export const isClassified = writable(false);
+export const classificationStore = writable(new ClassificationStore());
 
 // Next class ID counter
 let nextClassId = 0;
